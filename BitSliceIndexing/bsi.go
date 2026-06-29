@@ -745,34 +745,95 @@ func (b *BSI) MarshalBinary() ([][]byte, error) {
 
 // BatchEqual returns a bitmap containing the column IDs where the values are contained within the list of values provided.
 func (b *BSI) BatchEqual(parallelism int, values []int64) *roaring.Bitmap {
-
-	valMap := make(map[int64]struct{}, len(values))
-	for i := 0; i < len(values); i++ {
-		valMap[values[i]] = struct{}{}
-	}
-	comp := &task{bsi: b, values: valMap}
-	return parallelExecutor(parallelism, comp, batchEqual, b.eBM)
-}
-
-func batchEqual(e *task, batch []uint32, resultsChan chan *roaring.Bitmap,
-	wg *sync.WaitGroup) {
-
-	defer wg.Done()
-
-	results := roaring.NewBitmap()
-	if e.bsi.runOptimized {
-		results.RunOptimize()
+	if len(values) == 0 {
+		return roaring.NewBitmap()
 	}
 
-	for i := 0; i < len(batch); i++ {
-		cID := batch[i]
-		if value, ok := e.bsi.GetValue(uint64(cID)); ok {
-			if _, yes := e.values[value]; yes {
-				results.Add(cID)
-			}
+	// Deduplicate values
+	uniqueVals := make([]int64, 0, len(values))
+	seen := make(map[int64]bool, len(values))
+	for _, v := range values {
+		if !seen[v] {
+			seen[v] = true
+			uniqueVals = append(uniqueVals, v)
 		}
 	}
-	resultsChan <- results
+
+	bitmaps := make([]*roaring.Bitmap, len(uniqueVals))
+	numWorkers := parallelism
+	if numWorkers <= 0 {
+		numWorkers = runtime.NumCPU()
+	}
+	if numWorkers > len(uniqueVals) {
+		numWorkers = len(uniqueVals)
+	}
+
+	if numWorkers <= 1 {
+		for i, v := range uniqueVals {
+			bitmaps[i] = b.equalBitplanes(v)
+		}
+	} else {
+		var wg sync.WaitGroup
+		ch := make(chan int, len(uniqueVals))
+		for i := 0; i < len(uniqueVals); i++ {
+			ch <- i
+		}
+		close(ch)
+
+		for w := 0; w < numWorkers; w++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for idx := range ch {
+					bitmaps[idx] = b.equalBitplanes(uniqueVals[idx])
+				}
+			}()
+		}
+		wg.Wait()
+	}
+
+	var result *roaring.Bitmap
+	if len(bitmaps) == 0 {
+		result = roaring.NewBitmap()
+	} else if len(bitmaps) == 1 {
+		result = bitmaps[0]
+	} else {
+		result = roaring.ParOr(parallelism, bitmaps...)
+	}
+
+	if b.runOptimized {
+		result.RunOptimize()
+	}
+	return result
+}
+
+func (b *BSI) equalBitplanes(val int64) *roaring.Bitmap {
+	numBits := b.BitCount()
+	if numBits == 0 {
+		if val == 0 {
+			return b.eBM.Clone()
+		}
+		return roaring.NewBitmap()
+	}
+	if numBits < 64 {
+		if val < 0 || val >= (1<<uint64(numBits)) {
+			return roaring.NewBitmap()
+		}
+	}
+
+	match := b.eBM.Clone()
+	uval := uint64(val)
+	for i := 0; i < numBits; i++ {
+		if match.IsEmpty() {
+			break
+		}
+		if uval&(1<<uint64(i)) != 0 {
+			match.And(b.bA[i])
+		} else {
+			match.AndNot(b.bA[i])
+		}
+	}
+	return match
 }
 
 // ClearBits cleared the bits that exist in the target if they are also in the found set.
