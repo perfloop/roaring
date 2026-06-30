@@ -745,34 +745,105 @@ func (b *BSI) MarshalBinary() ([][]byte, error) {
 
 // BatchEqual returns a bitmap containing the column IDs where the values are contained within the list of values provided.
 func (b *BSI) BatchEqual(parallelism int, values []int64) *roaring.Bitmap {
+	if b.eBM.IsEmpty() || len(values) == 0 {
+		return roaring.NewBitmap()
+	}
 
+	// Deduplicate values
 	valMap := make(map[int64]struct{}, len(values))
-	for i := 0; i < len(values); i++ {
-		valMap[values[i]] = struct{}{}
-	}
-	comp := &task{bsi: b, values: valMap}
-	return parallelExecutor(parallelism, comp, batchEqual, b.eBM)
-}
-
-func batchEqual(e *task, batch []uint32, resultsChan chan *roaring.Bitmap,
-	wg *sync.WaitGroup) {
-
-	defer wg.Done()
-
-	results := roaring.NewBitmap()
-	if e.bsi.runOptimized {
-		results.RunOptimize()
+	for _, v := range values {
+		valMap[v] = struct{}{}
 	}
 
-	for i := 0; i < len(batch); i++ {
-		cID := batch[i]
-		if value, ok := e.bsi.GetValue(uint64(cID)); ok {
-			if _, yes := e.values[value]; yes {
-				results.Add(cID)
+	// Filter and collect valid unique values
+	bitCount := b.BitCount()
+	validValues := make([]int64, 0, len(valMap))
+	for v := range valMap {
+		if bitCount == 64 {
+			validValues = append(validValues, v)
+		} else {
+			if v >= 0 && v < (1<<uint64(bitCount)) {
+				validValues = append(validValues, v)
 			}
 		}
 	}
-	resultsChan <- results
+
+	if len(validValues) == 0 {
+		return roaring.NewBitmap()
+	}
+
+	// Determine parallelism
+	n := parallelism
+	if n == 0 {
+		n = runtime.NumCPU()
+	}
+	if n > len(validValues) {
+		n = len(validValues)
+	}
+
+	if n <= 1 {
+		// Sequential implementation for 1 thread or 1 value
+		results := make([]*roaring.Bitmap, 0, len(validValues))
+		for _, v := range validValues {
+			vBM := b.eBM.Clone()
+			for i := 0; i < bitCount; i++ {
+				if (uint64(v) & (1 << uint64(i))) != 0 {
+					vBM.And(b.bA[i])
+				} else {
+					vBM.AndNot(b.bA[i])
+				}
+			}
+			results = append(results, vBM)
+		}
+		// Combine results
+		var finalResult *roaring.Bitmap
+		if len(results) == 1 {
+			finalResult = results[0]
+		} else {
+			finalResult = roaring.FastOr(results...)
+		}
+		if b.runOptimized {
+			finalResult.RunOptimize()
+		}
+		return finalResult
+	}
+
+	// Parallel implementation for multiple values and multiple threads
+	resultsChan := make(chan *roaring.Bitmap, len(validValues))
+	sem := make(chan struct{}, n)
+	var wg sync.WaitGroup
+
+	for _, v := range validValues {
+		wg.Add(1)
+		go func(val int64) {
+			defer wg.Done()
+			sem <- struct{}{}
+			vBM := b.eBM.Clone()
+			for i := 0; i < bitCount; i++ {
+				if (uint64(val) & (1 << uint64(i))) != 0 {
+					vBM.And(b.bA[i])
+				} else {
+					vBM.AndNot(b.bA[i])
+				}
+			}
+			resultsChan <- vBM
+			<-sem
+		}(v)
+	}
+
+	wg.Wait()
+	close(resultsChan)
+
+	bitmaps := make([]*roaring.Bitmap, 0, len(validValues))
+	for bm := range resultsChan {
+		bitmaps = append(bitmaps, bm)
+	}
+
+	finalResult := roaring.ParOr(parallelism, bitmaps...)
+	if b.runOptimized {
+		finalResult.RunOptimize()
+	}
+	return finalResult
 }
 
 // ClearBits cleared the bits that exist in the target if they are also in the found set.
