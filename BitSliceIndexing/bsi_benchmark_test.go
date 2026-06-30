@@ -62,6 +62,44 @@ func TestBatchEqualEdgeCases(t *testing.T) {
 	assert.True(t, res.Contains(10))
 }
 
+func TestBatchEqualSub64Bit(t *testing.T) {
+	// NewBSI(100,0) (BitCount()==7) queried with {-5} and with {200} (>= 2^7)
+	// must both return an empty bitmap and must equal a GetValue-derived ground truth.
+	bsi := NewBSI(100, 0)
+	assert.Equal(t, 7, bsi.BitCount())
+
+	// Set some values inside range
+	bsi.SetValue(10, 42)
+	bsi.SetValue(20, 99)
+
+	// Ground truth function
+	getGroundTruth := func(query []int64) *roaring.Bitmap {
+		expected := roaring.NewBitmap()
+		valMap := make(map[int64]bool)
+		for _, q := range query {
+			valMap[q] = true
+		}
+		iter := bsi.GetExistenceBitmap().Iterator()
+		for iter.HasNext() {
+			col := iter.Next()
+			val, ok := bsi.GetValue(uint64(col))
+			if ok && valMap[val] {
+				expected.Add(col)
+			}
+		}
+		return expected
+	}
+
+	for _, q := range []int64{-5, 200} {
+		res := bsi.BatchEqual(0, []int64{q})
+		assert.True(t, res.IsEmpty())
+
+		expected := getGroundTruth([]int64{q})
+		assert.True(t, expected.IsEmpty())
+		assert.True(t, res.Equals(expected))
+	}
+}
+
 func TestBatchEqualConsistentWithGetValue(t *testing.T) {
 	rg := rand.New(rand.NewSource(42))
 	for run := 0; run < 15; run++ {

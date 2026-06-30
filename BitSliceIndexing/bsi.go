@@ -772,78 +772,14 @@ func (b *BSI) BatchEqual(parallelism int, values []int64) *roaring.Bitmap {
 		return roaring.NewBitmap()
 	}
 
-	// Fallback to scalar parallel executor if query list is very large
-	if len(validValues) > 128 {
-		comp := &task{bsi: b, values: valMap}
-		return parallelExecutor(parallelism, comp, batchEqualFallback, b.eBM)
-	}
-
-	// Determine parallelism
-	n := parallelism
-	if n == 0 {
-		n = runtime.NumCPU()
-	}
-	if n > len(validValues) {
-		n = len(validValues)
-	}
-
-	if n <= 1 {
-		// Sequential implementation
-		bitmaps := make([]*roaring.Bitmap, 0, len(validValues))
-		for _, v := range validValues {
-			bitmaps = append(bitmaps, b.getEqualBitmap(v))
-		}
-		var finalResult *roaring.Bitmap
-		if len(bitmaps) == 1 {
-			finalResult = bitmaps[0]
-		} else {
-			finalResult = bitmaps[0]
-			for i := 1; i < len(bitmaps); i++ {
-				finalResult.Or(bitmaps[i])
-			}
-		}
-		if b.runOptimized {
-			finalResult.RunOptimize()
-		}
-		return finalResult
-	}
-
-	// Parallel implementation with a bounded worker pool
-	valuesChan := make(chan int64, len(validValues))
-	for _, v := range validValues {
-		valuesChan <- v
-	}
-	close(valuesChan)
-
-	resultsChan := make(chan *roaring.Bitmap, len(validValues))
-	var wg sync.WaitGroup
-
-	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for val := range valuesChan {
-				resultsChan <- b.getEqualBitmap(val)
-			}
-		}()
-	}
-
-	wg.Wait()
-	close(resultsChan)
-
-	bitmaps := make([]*roaring.Bitmap, 0, len(validValues))
-	for bm := range resultsChan {
-		bitmaps = append(bitmaps, bm)
+	bitmaps := make([]*roaring.Bitmap, len(validValues))
+	for i, v := range validValues {
+		bitmaps[i] = b.getEqualBitmap(v)
 	}
 
 	var finalResult *roaring.Bitmap
 	if len(bitmaps) == 1 {
 		finalResult = bitmaps[0]
-	} else if len(bitmaps) <= 16 {
-		finalResult = bitmaps[0]
-		for i := 1; i < len(bitmaps); i++ {
-			finalResult.Or(bitmaps[i])
-		}
 	} else {
 		finalResult = roaring.ParOr(parallelism, bitmaps...)
 	}
@@ -886,27 +822,6 @@ func (b *BSI) getEqualBitmap(v int64) *roaring.Bitmap {
 		}
 	}
 	return vBM
-}
-
-func batchEqualFallback(e *task, batch []uint32, resultsChan chan *roaring.Bitmap,
-	wg *sync.WaitGroup) {
-
-	defer wg.Done()
-
-	results := roaring.NewBitmap()
-	if e.bsi.runOptimized {
-		results.RunOptimize()
-	}
-
-	for i := 0; i < len(batch); i++ {
-		cID := batch[i]
-		if value, ok := e.bsi.GetValue(uint64(cID)); ok {
-			if _, yes := e.values[value]; yes {
-				results.Add(cID)
-			}
-		}
-	}
-	resultsChan <- results
 }
 
 // ClearBits cleared the bits that exist in the target if they are also in the found set.
