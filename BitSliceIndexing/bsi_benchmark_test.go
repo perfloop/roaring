@@ -100,6 +100,31 @@ func TestBatchEqualSub64Bit(t *testing.T) {
 	}
 }
 
+func TestBatchEqualResultIsolation(t *testing.T) {
+	bsi := NewDefaultBSI()
+	bsi.SetValue(10, 42)
+	bsi.SetValue(20, 100)
+
+	// Get batch equal result
+	res := bsi.BatchEqual(0, []int64{42})
+	assert.True(t, res.Contains(10))
+
+	// Mutate the returned bitmap
+	res.Add(999)
+	res.Remove(10)
+
+	// Assert that the source BSI's internal state (existence bitmap and bit planes) is completely unaffected
+	assert.False(t, bsi.GetExistenceBitmap().Contains(999))
+	assert.True(t, bsi.GetExistenceBitmap().Contains(10))
+
+	val, ok := bsi.GetValue(10)
+	assert.True(t, ok)
+	assert.Equal(t, int64(42), val)
+
+	val, ok = bsi.GetValue(999)
+	assert.False(t, ok)
+}
+
 func TestBatchEqualConsistentWithGetValue(t *testing.T) {
 	rg := rand.New(rand.NewSource(42))
 	for run := 0; run < 15; run++ {
