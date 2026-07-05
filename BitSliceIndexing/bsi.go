@@ -773,11 +773,97 @@ func (b *BSI) BatchEqual(parallelism int, values []int64) *roaring.Bitmap {
 	}
 	sort.Slice(vals, func(i, j int) bool { return vals[i] < vals[j] })
 
+	if estimateBranchCount(vals, bitCount-1) >= 16 {
+		result := b.parallelBatchEqualScan(parallelism, vals)
+		if b.runOptimized {
+			result.RunOptimize()
+		}
+		return result
+	}
+
 	result := b.matchTrie(vals, bitCount-1, b.eBM, false)
 	if b.runOptimized {
 		result.RunOptimize()
 	}
 	return result
+}
+
+func estimateBranchCount(vals []uint64, p int) int {
+	if p < 0 || (p < 63 && uint64(len(vals)) == uint64(1)<<uint(p+1)) {
+		return 0
+	}
+	mask := uint64(1) << uint(p)
+	cut := sort.Search(len(vals), func(i int) bool {
+		return vals[i]&mask != 0
+	})
+	if cut == 0 {
+		return estimateBranchCount(vals, p-1)
+	}
+	if cut == len(vals) {
+		return estimateBranchCount(vals, p-1)
+	}
+	return 1 + estimateBranchCount(vals[:cut], p-1) + estimateBranchCount(vals[cut:], p-1)
+}
+
+func (b *BSI) parallelBatchEqualScan(parallelism int, vals []uint64) *roaring.Bitmap {
+	var n int = parallelism
+	if n == 0 {
+		n = runtime.NumCPU()
+	}
+
+	resultsChan := make(chan *roaring.Bitmap, n)
+
+	card := b.eBM.GetCardinality()
+	if card == 0 {
+		return roaring.NewBitmap()
+	}
+	x := card / uint64(n)
+
+	remainder := card - (x * uint64(n))
+	var wg sync.WaitGroup
+	iter := b.eBM.ManyIterator()
+
+	bitCount := b.BitCount()
+
+	maxVal := vals[len(vals)-1]
+	var denseLookup []bool
+	if maxVal < 1048576 {
+		denseLookup = make([]bool, maxVal+1)
+		for _, v := range vals {
+			denseLookup[v] = true
+		}
+	}
+
+	for i := 0; i < n; i++ {
+		var batch []uint32
+		if i == n-1 {
+			batch = make([]uint32, x+remainder)
+		} else {
+			batch = make([]uint32, x)
+		}
+		iter.NextMany(batch)
+		wg.Add(1)
+		go func(cols []uint32) {
+			defer wg.Done()
+			var out *roaring.Bitmap
+			if denseLookup != nil {
+				out = roaring.ParallelBSIScanHelper(cols, b.bA, bitCount, denseLookup, maxVal)
+			} else {
+				out = roaring.ParallelBSIScanHelperNoLookup(cols, b.bA, bitCount, vals)
+			}
+			resultsChan <- out
+		}(batch)
+	}
+
+	wg.Wait()
+	close(resultsChan)
+
+	ba := make([]*roaring.Bitmap, 0, n)
+	for bm := range resultsChan {
+		ba = append(ba, bm)
+	}
+
+	return roaring.ParOr(0, ba...)
 }
 
 // matchTrie returns the columns in prefix whose bits on planes [0, p] equal the low
