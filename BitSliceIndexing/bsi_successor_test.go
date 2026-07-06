@@ -60,7 +60,6 @@ func TestBatchEqualParallelScanCheckedInFixture(t *testing.T) {
 	if large == nil {
 		t.Skip("skipping, large BSI setup failed")
 	}
-	fmt.Printf("LARGE CARDINALITY: %d\n", large.GetExistenceBitmap().GetCardinality())
 
 	// Generate a query that triggers the parallel scan path (e.g. 130 scattered values)
 	rg := rand.New(rand.NewSource(12345))
@@ -72,7 +71,7 @@ func TestBatchEqualParallelScanCheckedInFixture(t *testing.T) {
 	// Result from the fallback path (either automatically triggered or explicitly run)
 	resAuto := large.BatchEqual(0, vals)
 
-	// Since branch count estimation for 32 random values will be >= 16,
+	// Since len(vals) >= 128 and estimateBranchCount >= 64,
 	// BatchEqual(0, vals) will run the parallel scan path.
 	// Let's verify that the results are a subset of eBM and perfectly match the ground truth.
 	outside := roaring.AndNot(resAuto, large.GetExistenceBitmap())

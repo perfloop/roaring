@@ -1,7 +1,5 @@
 package roaring
 
-var IsCandidate = true
-
 type activeContState struct {
 	cType int // 0: array, 1: bitmap, 2: run
 	shift uint
@@ -18,8 +16,15 @@ type activeContState struct {
 	runIdx int
 }
 
-// ParallelBSIScanHelper processes a batch of column IDs (cols) against the given bitplanes (bA)
-// and returns a new roaring.Bitmap containing the matching columns using specialized linear container scans.
+// ParallelBSIScanHelper is an internal optimization helper. It is exported solely because
+// the BSI functionality resides in the subpackage "github.com/RoaringBitmap/roaring/v2/BitSliceIndexing"
+// which must call into the core package to perform the fast parallel linear scan.
+// This function accesses unexported container implementations and their fields (such as keys,
+// arrayContainer.content, bitmapContainer.bitmap, and runContainer16.iv) to perform
+// highly specialized, zero-allocation container-level membership scans, which would be
+// impossible to implement with the same efficiency on the public API.
+//
+// Normal library users should not call this function directly.
 func ParallelBSIScanHelper(cols []uint32, bA []*Bitmap, bitCount int, vals []uint64) *Bitmap {
 	// Guard the sorted column ID assumption
 	for i := 1; i < len(cols); i++ {
