@@ -41,27 +41,19 @@ func ParallelBSIScanHelper(cols []uint32, bA []*Bitmap, bitCount int, vals []uin
 		return out
 	}
 
-	var curIndex []int
-	if bitCount <= 128 {
-		var curIndexBuf [128]int
-		curIndex = curIndexBuf[:bitCount]
-	} else {
-		curIndex = make([]int, bitCount)
+	if bitCount > 128 {
+		panic("ParallelBSIScanHelper: bitCount exceeds 128")
 	}
+	var curIndexBuf [128]int
+	curIndex := curIndexBuf[:bitCount]
 
 	var iCol int
 	for iCol < nCols {
 		col := cols[iCol]
 		hb := uint16(col >> 16)
 
-		// Fetch and pre-filter non-nil containers for this hb across all planes
 		var activeBuf [128]activeContState
-		var active []activeContState
-		if bitCount <= 128 {
-			active = activeBuf[:0]
-		} else {
-			active = make([]activeContState, 0, bitCount)
-		}
+		active := activeBuf[:0]
 
 		for p := 0; p < bitCount; p++ {
 			ra := bA[p].highlowcontainer
