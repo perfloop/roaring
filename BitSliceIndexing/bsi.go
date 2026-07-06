@@ -773,7 +773,7 @@ func (b *BSI) BatchEqual(parallelism int, values []int64) *roaring.Bitmap {
 	}
 	sort.Slice(vals, func(i, j int) bool { return vals[i] < vals[j] })
 
-	if len(vals) >= 16 && b.shouldUseParallelScan(vals, bitCount) {
+	if len(vals) >= 128 && b.shouldUseParallelScan(vals, bitCount) {
 		result := b.parallelBatchEqualScan(parallelism, vals)
 		if b.runOptimized {
 			result.RunOptimize()
@@ -795,7 +795,7 @@ func (b *BSI) shouldUseParallelScan(vals []uint64, bitCount int) bool {
 	if b.eBM.GetContainerCount() < 2 {
 		return false
 	}
-	if estimateBranchCount(vals, bitCount-1, 16) < 16 {
+	if estimateBranchCount(vals, bitCount-1, 64) < 64 {
 		return false
 	}
 	if b.eBM.GetCardinality() < 100000 {
