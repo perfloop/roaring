@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestParallelBSIScanHelperAssertion(t *testing.T) {
+func TestBatchEqualParallelBSIScanHelperAssertion(t *testing.T) {
 	unsortedCols := []uint32{10, 5, 20}
 	sortedCols := []uint32{5, 10, 20}
 	emptyCols := []uint32{}
@@ -34,7 +34,7 @@ func TestParallelBSIScanHelperAssertion(t *testing.T) {
 	})
 }
 
-func TestParallelBSIScanHelperValsAssertion(t *testing.T) {
+func TestBatchEqualParallelBSIScanHelperValsAssertion(t *testing.T) {
 	unsortedVals := []uint64{10, 5, 20}
 	sortedCols := []uint32{5, 10, 20}
 	dummyBA := []*roaring.Bitmap{roaring.NewBitmap()}
