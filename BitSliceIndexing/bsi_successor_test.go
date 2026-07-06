@@ -14,7 +14,7 @@ func TestBatchEqualLargeQueryValues(t *testing.T) {
 	for run := 0; run < 10; run++ {
 		// Create a randomized BSI with large values >= 1,048,576
 		bsi := NewDefaultBSI()
-		numCols := rg.Intn(500) + 50
+		numCols := rg.Intn(50000) + 120000
 		for col := 0; col < numCols; col++ {
 			if rg.Float64() < 0.8 {
 				// Generate some large positive values around 1,048,576
@@ -23,8 +23,8 @@ func TestBatchEqualLargeQueryValues(t *testing.T) {
 			}
 		}
 
-		// Generate query values containing values >= 1,048,576 (above the dense threshold)
-		querySize := rg.Intn(100) + 20
+		// Generate query values containing values >= 1,048,576
+		querySize := rg.Intn(100) + 128
 		query := make([]int64, querySize)
 		for i := range query {
 			query[i] = rg.Int63n(100100) + 1048500
@@ -62,9 +62,9 @@ func TestBatchEqualParallelScanCheckedInFixture(t *testing.T) {
 	}
 	fmt.Printf("LARGE CARDINALITY: %d\n", large.GetExistenceBitmap().GetCardinality())
 
-	// Generate a query that triggers the parallel scan path (e.g. 32 scattered values)
+	// Generate a query that triggers the parallel scan path (e.g. 130 scattered values)
 	rg := rand.New(rand.NewSource(12345))
-	vals := make([]int64, 32)
+	vals := make([]int64, 130)
 	for i := range vals {
 		vals[i] = rg.Int63n(100)
 	}
