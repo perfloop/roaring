@@ -773,7 +773,7 @@ func (b *BSI) BatchEqual(parallelism int, values []int64) *roaring.Bitmap {
 	}
 	sort.Slice(vals, func(i, j int) bool { return vals[i] < vals[j] })
 
-	if estimateBranchCount(vals, bitCount-1) >= 16 {
+	if estimateBranchCount(vals, bitCount-1, 16) >= 16 {
 		result := b.parallelBatchEqualScan(parallelism, vals)
 		if b.runOptimized {
 			result.RunOptimize()
@@ -788,7 +788,13 @@ func (b *BSI) BatchEqual(parallelism int, values []int64) *roaring.Bitmap {
 	return result
 }
 
-func estimateBranchCount(vals []uint64, p int) int {
+func estimateBranchCount(vals []uint64, p int, limit int) int {
+	if limit <= 0 {
+		return 0
+	}
+	if p >= 64 {
+		p = 63
+	}
 	if p < 0 || (p < 63 && uint64(len(vals)) == uint64(1)<<uint(p+1)) {
 		return 0
 	}
@@ -796,13 +802,14 @@ func estimateBranchCount(vals []uint64, p int) int {
 	cut := sort.Search(len(vals), func(i int) bool {
 		return vals[i]&mask != 0
 	})
-	if cut == 0 {
-		return estimateBranchCount(vals, p-1)
+	if cut == 0 || cut == len(vals) {
+		return estimateBranchCount(vals, p-1, limit)
 	}
-	if cut == len(vals) {
-		return estimateBranchCount(vals, p-1)
-	}
-	return 1 + estimateBranchCount(vals[:cut], p-1) + estimateBranchCount(vals[cut:], p-1)
+	leftLimit := limit - 1
+	leftBranch := estimateBranchCount(vals[:cut], p-1, leftLimit)
+	rightLimit := leftLimit - leftBranch
+	rightBranch := estimateBranchCount(vals[cut:], p-1, rightLimit)
+	return 1 + leftBranch + rightBranch
 }
 
 func (b *BSI) parallelBatchEqualScan(parallelism int, vals []uint64) *roaring.Bitmap {
@@ -828,15 +835,6 @@ func (b *BSI) parallelBatchEqualScan(parallelism int, vals []uint64) *roaring.Bi
 
 	bitCount := b.BitCount()
 
-	maxVal := vals[len(vals)-1]
-	var denseLookup []bool
-	if maxVal < 1048576 {
-		denseLookup = make([]bool, maxVal+1)
-		for _, v := range vals {
-			denseLookup[v] = true
-		}
-	}
-
 	for i := 0; i < n; i++ {
 		var batch []uint32
 		if i == n-1 {
@@ -848,12 +846,7 @@ func (b *BSI) parallelBatchEqualScan(parallelism int, vals []uint64) *roaring.Bi
 		wg.Add(1)
 		go func(cols []uint32) {
 			defer wg.Done()
-			var out *roaring.Bitmap
-			if denseLookup != nil {
-				out = roaring.ParallelBSIScanHelper(cols, b.bA, bitCount, denseLookup, maxVal)
-			} else {
-				out = roaring.ParallelBSIScanHelperNoLookup(cols, b.bA, bitCount, vals)
-			}
+			out := roaring.ParallelBSIScanHelper(cols, b.bA, bitCount, vals)
 			resultsChan <- out
 		}(batch)
 	}

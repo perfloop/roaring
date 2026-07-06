@@ -71,35 +71,14 @@ func TestParallelBSIScanHelperAssertion(t *testing.T) {
 				t.Errorf("Expected specific panic message, got: %v", r)
 			}
 		}()
-		_ = roaring.ParallelBSIScanHelper(unsortedCols, nil, 0, nil, 0)
+		_ = roaring.ParallelBSIScanHelper(unsortedCols, nil, 0, nil)
 	})
 
 	t.Run("ParallelBSIScanHelper_SortedAndEmpty", func(t *testing.T) {
 		dummyBA := []*roaring.Bitmap{roaring.NewBitmap()}
-		dense := []bool{false, true}
-		_ = roaring.ParallelBSIScanHelper(sortedCols, dummyBA, 1, dense, 1)
-		_ = roaring.ParallelBSIScanHelper(emptyCols, dummyBA, 1, dense, 1)
-	})
-
-	t.Run("ParallelBSIScanHelperNoLookup_Unsorted", func(t *testing.T) {
-		defer func() {
-			r := recover()
-			if r == nil {
-				t.Errorf("Expected ParallelBSIScanHelperNoLookup to panic on unsorted cols")
-			}
-			msg, ok := r.(string)
-			if !ok || msg != "ParallelBSIScanHelperNoLookup: input cols must be sorted in ascending order" {
-				t.Errorf("Expected specific panic message, got: %v", r)
-			}
-		}()
-		_ = roaring.ParallelBSIScanHelperNoLookup(unsortedCols, nil, 0, nil)
-	})
-
-	t.Run("ParallelBSIScanHelperNoLookup_SortedAndEmpty", func(t *testing.T) {
-		dummyBA := []*roaring.Bitmap{roaring.NewBitmap()}
 		vals := []uint64{0, 1}
-		_ = roaring.ParallelBSIScanHelperNoLookup(sortedCols, dummyBA, 1, vals)
-		_ = roaring.ParallelBSIScanHelperNoLookup(emptyCols, dummyBA, 1, vals)
+		_ = roaring.ParallelBSIScanHelper(sortedCols, dummyBA, 1, vals)
+		_ = roaring.ParallelBSIScanHelper(emptyCols, dummyBA, 1, vals)
 	})
 }
 
