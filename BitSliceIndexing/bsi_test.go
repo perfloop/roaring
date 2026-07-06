@@ -591,3 +591,73 @@ func TestBatchEqualManyBitplanes(t *testing.T) {
 	assert.False(t, resScan.Contains(1))
 	assert.False(t, resScan.Contains(3))
 }
+
+// TestBatchEqualExistenceAuthority pins BatchEqual results to the existence
+// bitmap. UnmarshalBinary accepts plane data that is not a subset of eBM (the
+// checked-in testdata/age fixture is such data), and every read path treats
+// eBM as authoritative, so columns present in a plane but absent from eBM must
+// never appear in results.
+func TestBatchEqualExistenceAuthority(t *testing.T) {
+	// Synthetic state: column 2 has bits in plane 0 but is absent from eBM.
+	ebm := roaring.BitmapOf(1)
+	plane := roaring.BitmapOf(1, 2)
+	ebmData, err := ebm.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	planeData, err := plane.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bsi := NewDefaultBSI()
+	if err := bsi.UnmarshalBinary([][]byte{ebmData, planeData}); err != nil {
+		t.Fatal(err)
+	}
+	res := bsi.BatchEqual(0, []int64{1})
+	assert.True(t, res.Contains(1))
+	assert.False(t, res.Contains(2), "column 2 is not in eBM and must not match")
+
+	// The age fixture ships with plane cardinalities above the eBM cardinality;
+	// results must still be a subset of eBM.
+	large := setupLargeBSI(t)
+	if large == nil {
+		t.Skip("skipping, large BSI setup failed")
+	}
+	for _, vals := range [][]int64{{16}, {55, 57}, {0, 1, 2, 3}} {
+		res := large.BatchEqual(0, vals)
+		outside := roaring.AndNot(res, large.GetExistenceBitmap())
+		assert.True(t, outside.IsEmpty(), "BatchEqual(%v) returned %d columns outside eBM", vals, outside.GetCardinality())
+	}
+}
+
+func TestBatchEqualManyBitplanesPanicSafety(t *testing.T) {
+	// Create a BSI with 130 bitplanes (exceeding 128)
+	bsi := NewDefaultBSI()
+
+	bsi.eBM.Add(1)
+	bsi.eBM.Add(2)
+
+	bsi.bA = make([]*roaring.Bitmap, 130)
+	for i := range bsi.bA {
+		bsi.bA[i] = roaring.NewBitmap()
+	}
+
+	// Set value on plane 129
+	bsi.bA[129].Add(1)
+
+	// query with 130 scattered values (size >= 128)
+	query := make([]int64, 130)
+	for i := range query {
+		query[i] = int64(i) * 3
+	}
+
+	// This must not panic (it should safely stay on the trie walk and complete)
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("BatchEqual panicked with > 128 bitplanes: %v", r)
+		}
+	}()
+
+	res := bsi.BatchEqual(0, query)
+	_ = res
+}

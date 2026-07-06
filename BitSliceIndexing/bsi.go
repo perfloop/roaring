@@ -789,6 +789,9 @@ func (b *BSI) BatchEqual(parallelism int, values []int64) *roaring.Bitmap {
 }
 
 func (b *BSI) shouldUseParallelScan(vals []uint64, bitCount int) bool {
+	if bitCount > 128 {
+		return false
+	}
 	if vals[len(vals)-1]-vals[0] == uint64(len(vals)-1) {
 		return false
 	}
