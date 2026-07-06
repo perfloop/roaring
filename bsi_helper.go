@@ -2,18 +2,36 @@ package roaring
 
 var IsCandidate = true
 
-type activeCont struct {
-	c     container
+type activeContState struct {
+	cType int // 0: array, 1: bitmap, 2: run
 	shift uint
+
+	// arrayContainer fields
+	arrayContent []uint16
+	arrayIdx     int
+
+	// bitmapContainer fields
+	bitmapContent []uint64
+
+	// runContainer16 fields
+	runIv  []interval16
+	runIdx int
 }
 
 // ParallelBSIScanHelper processes a batch of column IDs (cols) against the given bitplanes (bA)
-// and returns a new roaring.Bitmap containing the matching columns using inline binary search.
+// and returns a new roaring.Bitmap containing the matching columns using specialized linear container scans.
 func ParallelBSIScanHelper(cols []uint32, bA []*Bitmap, bitCount int, vals []uint64) *Bitmap {
 	// Guard the sorted column ID assumption
 	for i := 1; i < len(cols); i++ {
 		if cols[i] < cols[i-1] {
 			panic("ParallelBSIScanHelper: input cols must be sorted in ascending order")
+		}
+	}
+
+	// Guard the sorted vals assumption
+	for i := 1; i < len(vals); i++ {
+		if vals[i] < vals[i-1] {
+			panic("ParallelBSIScanHelper: input vals must be sorted in ascending order")
 		}
 	}
 
@@ -37,12 +55,12 @@ func ParallelBSIScanHelper(cols []uint32, bA []*Bitmap, bitCount int, vals []uin
 		hb := uint16(col >> 16)
 
 		// Fetch and pre-filter non-nil containers for this hb across all planes
-		var activeBuf [128]activeCont
-		var active []activeCont
+		var activeBuf [128]activeContState
+		var active []activeContState
 		if bitCount <= 128 {
 			active = activeBuf[:0]
 		} else {
-			active = make([]activeCont, 0, bitCount)
+			active = make([]activeContState, 0, bitCount)
 		}
 
 		for p := 0; p < bitCount; p++ {
@@ -50,10 +68,23 @@ func ParallelBSIScanHelper(cols []uint32, bA []*Bitmap, bitCount int, vals []uin
 			idx := ra.binarySearch(int64(curIndex[p]), int64(len(ra.keys)), hb)
 			if idx >= 0 {
 				curIndex[p] = idx
-				active = append(active, activeCont{
-					c:     ra.containers[idx],
+				c := ra.containers[idx]
+
+				state := activeContState{
 					shift: uint(p),
-				})
+				}
+				switch tc := c.(type) {
+				case *arrayContainer:
+					state.cType = 0
+					state.arrayContent = tc.content
+				case *bitmapContainer:
+					state.cType = 1
+					state.bitmapContent = tc.bitmap
+				case *runContainer16:
+					state.cType = 2
+					state.runIv = tc.iv
+				}
+				active = append(active, state)
 			} else {
 				curIndex[p] = -idx - 1
 			}
@@ -72,7 +103,29 @@ func ParallelBSIScanHelper(cols []uint32, bA []*Bitmap, bitCount int, vals []uin
 			lb := uint16(currCol & 0xffff)
 			for p := 0; p < len(active); p++ {
 				ac := &active[p]
-				if ac.c.contains(lb) {
+				found := false
+				switch ac.cType {
+				case 0: // arrayContainer
+					for ac.arrayIdx < len(ac.arrayContent) && ac.arrayContent[ac.arrayIdx] < lb {
+						ac.arrayIdx++
+					}
+					if ac.arrayIdx < len(ac.arrayContent) && ac.arrayContent[ac.arrayIdx] == lb {
+						found = true
+					}
+				case 1: // bitmapContainer
+					if (ac.bitmapContent[lb>>6] & (uint64(1) << (lb & 63))) != 0 {
+						found = true
+					}
+				case 2: // runContainer16
+					for ac.runIdx < len(ac.runIv) && uint32(ac.runIv[ac.runIdx].start)+uint32(ac.runIv[ac.runIdx].length) < uint32(lb) {
+						ac.runIdx++
+					}
+					if ac.runIdx < len(ac.runIv) && lb >= ac.runIv[ac.runIdx].start {
+						found = true
+					}
+				}
+
+				if found {
 					if ac.shift >= 64 {
 						overflow = true
 						break
@@ -84,12 +137,12 @@ func ParallelBSIScanHelper(cols []uint32, bA []*Bitmap, bitCount int, vals []uin
 			if !overflow {
 				// Binary search inline on vals
 				l, r := 0, len(vals)-1
-				found := false
+				foundVal := false
 				for l <= r {
 					m := (l + r) >> 1
 					v := vals[m]
 					if v == val {
-						found = true
+						foundVal = true
 						break
 					}
 					if v < val {
@@ -98,7 +151,7 @@ func ParallelBSIScanHelper(cols []uint32, bA []*Bitmap, bitCount int, vals []uin
 						r = m - 1
 					}
 				}
-				if found {
+				if foundVal {
 					out.Add(currCol)
 				}
 			}

@@ -82,6 +82,26 @@ func TestParallelBSIScanHelperAssertion(t *testing.T) {
 	})
 }
 
+func TestParallelBSIScanHelperValsAssertion(t *testing.T) {
+	unsortedVals := []uint64{10, 5, 20}
+	sortedCols := []uint32{5, 10, 20}
+	dummyBA := []*roaring.Bitmap{roaring.NewBitmap()}
+
+	t.Run("ParallelBSIScanHelper_UnsortedVals", func(t *testing.T) {
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Errorf("Expected ParallelBSIScanHelper to panic on unsorted vals")
+			}
+			msg, ok := r.(string)
+			if !ok || msg != "ParallelBSIScanHelper: input vals must be sorted in ascending order" {
+				t.Errorf("Expected specific panic message, got: %v", r)
+			}
+		}()
+		_ = roaring.ParallelBSIScanHelper(sortedCols, dummyBA, 1, unsortedVals)
+	})
+}
+
 func TestBatchEqualManyBitplanes(t *testing.T) {
 	// Create a BSI with 70 bitplanes (more than 64!)
 	bsi := NewDefaultBSI()
