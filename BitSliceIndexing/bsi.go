@@ -773,7 +773,7 @@ func (b *BSI) BatchEqual(parallelism int, values []int64) *roaring.Bitmap {
 	}
 	sort.Slice(vals, func(i, j int) bool { return vals[i] < vals[j] })
 
-	if estimateBranchCount(vals, bitCount-1, 16) >= 16 {
+	if len(vals) >= 16 && b.eBM.GetCardinality() >= 8192 && estimateBranchCount(vals, bitCount-1, 16) >= 16 {
 		result := b.parallelBatchEqualScan(parallelism, vals)
 		if b.runOptimized {
 			result.RunOptimize()
@@ -789,7 +789,11 @@ func (b *BSI) BatchEqual(parallelism int, values []int64) *roaring.Bitmap {
 }
 
 func estimateBranchCount(vals []uint64, p int, limit int) int {
-	if limit <= 0 {
+	if len(vals) <= 1 || limit <= 0 {
+		return 0
+	}
+	// Quick O(1) check: if the values are perfectly contiguous, branch count is 0
+	if vals[len(vals)-1]-vals[0] == uint64(len(vals)-1) {
 		return 0
 	}
 	if p >= 64 {

@@ -60,6 +60,7 @@ func TestBatchEqualParallelScanCheckedInFixture(t *testing.T) {
 	if large == nil {
 		t.Skip("skipping, large BSI setup failed")
 	}
+	fmt.Printf("LARGE CARDINALITY: %d\n", large.GetExistenceBitmap().GetCardinality())
 
 	// Generate a query that triggers the parallel scan path (e.g. 32 scattered values)
 	rg := rand.New(rand.NewSource(12345))
@@ -177,5 +178,26 @@ func BenchmarkBatchEqualSweepBranchCount(b *testing.B) {
 				_ = res
 			}
 		})
+	}
+}
+
+func BenchmarkBatchEqualClustered(b *testing.B) {
+	rg := rand.New(rand.NewSource(12345))
+	bsi := setupLargeBSI(b)
+	if bsi == nil {
+		b.Skip("skipping, large BSI setup failed")
+		return
+	}
+	// Generate query values that form clustered ranges: e.g. 8 clusters of 4 contiguous values each
+	vals := make([]int64, 0, 32)
+	for cluster := 0; cluster < 8; cluster++ {
+		start := rg.Int63n(100) * 10
+		for i := int64(0); i < 4; i++ {
+			vals = append(vals, start+i)
+		}
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = bsi.BatchEqual(0, vals)
 	}
 }
