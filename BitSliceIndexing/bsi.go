@@ -789,18 +789,23 @@ func (b *BSI) BatchEqual(parallelism int, values []int64) *roaring.Bitmap {
 }
 
 func (b *BSI) shouldUseParallelScan(vals []uint64, bitCount int) bool {
+	// Guard against BSIs with excessive bitplanes to ensure safe limits.
 	if bitCount > 128 {
 		return false
 	}
+	// Avoid scanning for perfectly contiguous ranges which are highly efficient on the trie.
 	if vals[len(vals)-1]-vals[0] == uint64(len(vals)-1) {
 		return false
 	}
+	// If existence bitmap has only 1 container, sequential trie walk is already very fast.
 	if b.eBM.GetContainerCount() < 2 {
 		return false
 	}
+	// Verify if the unique query values split frequently to cause a branch blowup on the trie.
 	if estimateBranchCount(vals, bitCount-1, 64) < 64 {
 		return false
 	}
+	// The overhead of launching goroutines is only justified on sufficiently large existence bitmaps.
 	if b.eBM.GetCardinality() < 100000 {
 		return false
 	}
