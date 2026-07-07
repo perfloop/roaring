@@ -29,14 +29,14 @@ func ParallelBSIScanHelper(cols []uint32, bA []*Bitmap, bitCount int, vals []uin
 	// Guard the sorted column ID assumption
 	for i := 1; i < len(cols); i++ {
 		if cols[i] < cols[i-1] {
-			panic("ParallelBSIScanHelper: input cols must be sorted in ascending order")
+			return NewBitmap()
 		}
 	}
 
 	// Guard the sorted vals assumption
 	for i := 1; i < len(vals); i++ {
 		if vals[i] < vals[i-1] {
-			panic("ParallelBSIScanHelper: input vals must be sorted in ascending order")
+			return NewBitmap()
 		}
 	}
 
@@ -47,7 +47,7 @@ func ParallelBSIScanHelper(cols []uint32, bA []*Bitmap, bitCount int, vals []uin
 	}
 
 	if bitCount > 128 {
-		panic("ParallelBSIScanHelper: bitCount exceeds 128")
+		return out
 	}
 	var curIndexBuf [128]int
 	curIndex := curIndexBuf[:bitCount]

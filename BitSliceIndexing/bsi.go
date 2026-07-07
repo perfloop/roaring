@@ -805,8 +805,10 @@ func (b *BSI) shouldUseParallelScan(vals []uint64, bitCount int) bool {
 	if estimateBranchCount(vals, bitCount-1, 64) < 64 {
 		return false
 	}
-	// The overhead of launching goroutines is only justified on sufficiently large existence bitmaps.
-	if b.eBM.GetCardinality() < 100000 {
+	// Bounding the lower and upper cardinality limits guarantees efficiency and protects
+	// against resource/memory amplification (OOM) on extremely high cardinality queries.
+	card := b.eBM.GetCardinality()
+	if card < 100000 || card > 5000000 {
 		return false
 	}
 	return true

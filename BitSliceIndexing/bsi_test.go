@@ -510,16 +510,12 @@ func TestBatchEqualParallelBSIScanHelperAssertion(t *testing.T) {
 
 	t.Run("ParallelBSIScanHelper_Unsorted", func(t *testing.T) {
 		defer func() {
-			r := recover()
-			if r == nil {
-				t.Errorf("Expected ParallelBSIScanHelper to panic on unsorted cols")
-			}
-			msg, ok := r.(string)
-			if !ok || msg != "ParallelBSIScanHelper: input cols must be sorted in ascending order" {
-				t.Errorf("Expected specific panic message, got: %v", r)
+			if r := recover(); r != nil {
+				t.Errorf("Expected ParallelBSIScanHelper to not panic on unsorted cols, but got: %v", r)
 			}
 		}()
-		_ = roaring.ParallelBSIScanHelper(unsortedCols, nil, 0, nil)
+		res := roaring.ParallelBSIScanHelper(unsortedCols, nil, 0, nil)
+		assert.True(t, res.IsEmpty(), "expected empty bitmap on unsorted cols")
 	})
 
 	t.Run("ParallelBSIScanHelper_SortedAndEmpty", func(t *testing.T) {
@@ -537,16 +533,12 @@ func TestBatchEqualParallelBSIScanHelperValsAssertion(t *testing.T) {
 
 	t.Run("ParallelBSIScanHelper_UnsortedVals", func(t *testing.T) {
 		defer func() {
-			r := recover()
-			if r == nil {
-				t.Errorf("Expected ParallelBSIScanHelper to panic on unsorted vals")
-			}
-			msg, ok := r.(string)
-			if !ok || msg != "ParallelBSIScanHelper: input vals must be sorted in ascending order" {
-				t.Errorf("Expected specific panic message, got: %v", r)
+			if r := recover(); r != nil {
+				t.Errorf("Expected ParallelBSIScanHelper to not panic on unsorted vals, but got: %v", r)
 			}
 		}()
-		_ = roaring.ParallelBSIScanHelper(sortedCols, dummyBA, 1, unsortedVals)
+		res := roaring.ParallelBSIScanHelper(sortedCols, dummyBA, 1, unsortedVals)
+		assert.True(t, res.IsEmpty(), "expected empty bitmap on unsorted vals")
 	})
 }
 
@@ -746,4 +738,50 @@ func TestBatchEqualParallelScanCheckedInFixture(t *testing.T) {
 	}
 
 	assert.True(t, resAuto.Equals(expected), "Parallel scan results do not match ground truth on checked-in fixture")
+}
+
+func TestBatchEqualUnsortedInputsSafety(t *testing.T) {
+	// Guard against panicking when cols are unsorted
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("ParallelBSIScanHelper panicked on unsorted cols: %v", r)
+		}
+	}()
+
+	bA := []*roaring.Bitmap{roaring.NewBitmap()}
+	cols := []uint32{10, 5, 20} // Unsorted
+	vals := []uint64{1, 2, 3}
+	res := roaring.ParallelBSIScanHelper(cols, bA, 1, vals)
+	assert.True(t, res.IsEmpty(), "expected empty bitmap on unsorted cols")
+
+	// Guard against panicking when vals are unsorted
+	colsSorted := []uint32{5, 10, 20}
+	valsUnsorted := []uint64{3, 1, 2} // Unsorted
+	res2 := roaring.ParallelBSIScanHelper(colsSorted, bA, 1, valsUnsorted)
+	assert.True(t, res2.IsEmpty(), "expected empty bitmap on unsorted vals")
+}
+
+func TestBatchEqualExtremeCardinalitySafety(t *testing.T) {
+	bsi := NewDefaultBSI()
+	// Mock a high existence cardinality of 10,000,000
+	bsi.eBM.Add(1)
+	bsi.eBM.Add(10000000)
+
+	// Since cardinality is checked from GetCardinality, we can mock/set up values or check shouldUseParallelScan directly.
+	// We want to ensure shouldUseParallelScan returns false when cardinality exceeds 5,000,000.
+	vals := make([]uint64, 130)
+	for i := range vals {
+		vals[i] = uint64(i) * 5
+	}
+
+	// Mock the cardinality of the existence bitmap without actually adding 10M elements
+	// Wait, we can't easily mock eBM.GetCardinality() directly because it's a real roaring.Bitmap,
+	// but adding 5,000,001 individual elements might be slow.
+	// Actually, we can add a range: roaring.Bitmap's AddRange can add 6,000,000 elements in O(1) time and memory!
+	bsi.eBM.AddRange(0, 6000000)
+	assert.Equal(t, uint64(6000001), bsi.eBM.GetCardinality())
+
+	// Verifying that shouldUseParallelScan returns false (protecting against allocation of 6M elements)
+	res := bsi.shouldUseParallelScan(vals, 8)
+	assert.False(t, res, "shouldUseParallelScan must return false when existence cardinality is > 5,000,000")
 }
