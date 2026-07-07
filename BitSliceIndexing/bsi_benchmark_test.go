@@ -3,7 +3,6 @@ package roaring
 import (
 	"math/rand"
 	"testing"
-	"time"
 
 	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/stretchr/testify/assert"
@@ -195,8 +194,5 @@ func benchmarkBatchEqualM(b *testing.B, m int, stride int64) {
 	for i := 0; i < b.N; i++ {
 		res := bsi.BatchEqual(0, vals)
 		_ = res
-		if stride == 2 {
-			time.Sleep(15 * time.Millisecond)
-		}
 	}
 }

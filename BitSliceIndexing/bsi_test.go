@@ -1,7 +1,5 @@
 package roaring
 
-// Standard upstream integration correctness verification tests
-
 import (
 	"fmt"
 	"math/rand"
