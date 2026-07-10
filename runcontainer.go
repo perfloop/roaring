@@ -2267,12 +2267,7 @@ func (rc *runContainer16) ior(a container) container {
 }
 
 func (rc *runContainer16) inplaceUnion(rc2 *runContainer16) container {
-	for _, p := range rc2.iv {
-		last := int(p.last())
-		for i := int(p.start); i <= last; i++ {
-			rc.Add(uint16(i))
-		}
-	}
+	rc.iv = rc.union(rc2).iv
 	return rc.toEfficientContainer()
 }
 
