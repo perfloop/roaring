@@ -2275,9 +2275,20 @@ func (rc *runContainer16) inplaceUnion(rc2 *runContainer16) container {
 		return rc.toEfficientContainer()
 	}
 
-	if len(rc2.iv) == 1 && rc2.iv[0].runlen() <= 4 {
-		for i := int(rc2.iv[0].start); i <= int(rc2.iv[0].last()); i++ {
-			rc.Add(uint16(i))
+	card2 := 0
+	for _, p := range rc2.iv {
+		card2 += p.runlen()
+		if card2 > 16 {
+			break
+		}
+	}
+
+	if card2 <= 4 || card2*8 < len(rc.iv) {
+		for _, p := range rc2.iv {
+			last := int(p.last())
+			for i := int(p.start); i <= last; i++ {
+				rc.Add(uint16(i))
+			}
 		}
 		return rc.toEfficientContainer()
 	}
