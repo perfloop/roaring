@@ -2270,21 +2270,6 @@ func (rc *runContainer16) inplaceUnion(rc2 *runContainer16) container {
 	if len(rc2.iv) == 0 {
 		return rc.toEfficientContainer()
 	}
-	if len(rc.iv) == 0 {
-		rc.iv = append([]interval16(nil), rc2.iv...)
-		return rc.toEfficientContainer()
-	}
-
-	if len(rc2.iv) == 1 {
-		card2 := rc2.iv[0].runlen()
-		if card2 <= 4 {
-			last := int(rc2.iv[0].last())
-			for i := int(rc2.iv[0].start); i <= last; i++ {
-				rc.Add(uint16(i))
-			}
-			return rc.toEfficientContainer()
-		}
-	}
 
 	isSortedAndValid := true
 	for i := 0; i < len(rc2.iv); i++ {
@@ -2301,6 +2286,33 @@ func (rc *runContainer16) inplaceUnion(rc2 *runContainer16) container {
 	}
 
 	if !isSortedAndValid {
+		for _, p := range rc2.iv {
+			last := int(p.last())
+			for i := int(p.start); i <= last; i++ {
+				rc.Add(uint16(i))
+			}
+		}
+		return rc.toEfficientContainer()
+	}
+
+	if len(rc.iv) == 0 {
+		rc.iv = append([]interval16(nil), rc2.iv...)
+		return rc.toEfficientContainer()
+	}
+
+	var card2 int
+	if len(rc2.iv) == 1 {
+		card2 = rc2.iv[0].runlen()
+	} else {
+		for _, p := range rc2.iv {
+			card2 += p.runlen()
+			if card2 > 16 {
+				break
+			}
+		}
+	}
+
+	if card2 <= 4 || card2*8 < len(rc.iv) {
 		for _, p := range rc2.iv {
 			last := int(p.last())
 			for i := int(p.start); i <= last; i++ {

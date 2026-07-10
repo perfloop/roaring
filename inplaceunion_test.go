@@ -170,6 +170,26 @@ func TestRunContainer16InplaceUnionAdversarialWrapped(t *testing.T) {
 	}
 }
 
+func TestRunContainer16InplaceUnionEmptyReceiverWithUnsorted(t *testing.T) {
+	rc1 := &runContainer16{
+		iv: []interval16{},
+	}
+	rc2 := &runContainer16{
+		iv: []interval16{newInterval16Range(30, 30), newInterval16Range(10, 10)},
+	}
+
+	res := rc1.inplaceUnion(rc2)
+	want := []uint16{10, 30}
+	assert.Equal(t, want, containerToSlice(res))
+
+	resRc, ok := res.(*runContainer16)
+	if ok {
+		assert.Equal(t, 2, len(resRc.iv))
+		assert.Equal(t, uint16(10), resRc.iv[0].start)
+		assert.Equal(t, uint16(30), resRc.iv[1].start)
+	}
+}
+
 func containerToSlice(c container) []uint16 {
 	it := c.getShortIterator()
 	var res []uint16
@@ -290,4 +310,26 @@ func BenchmarkRunContainerInplaceUnion(b *testing.B) {
 			_ = rc.inplaceUnion(rc2)
 		}
 	})
+
+	for _, N := range []int{100, 1000, 10000} {
+		b.Run(fmt.Sprintf("Sweep_N=%d_runlen=5", N), func(b *testing.B) {
+			iv1 := make([]interval16, N)
+			for i := 0; i < N; i++ {
+				iv1[i] = newInterval16Range(uint16(i*20), uint16(i*20+5))
+			}
+			iv2 := []interval16{
+				newInterval16Range(uint16(N*20+10), uint16(N*20+14)),
+			}
+
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				rc := &runContainer16{
+					iv: make([]interval16, len(iv1), len(iv1)+len(iv2)),
+				}
+				copy(rc.iv, iv1)
+				rc2 := &runContainer16{iv: iv2}
+				_ = rc.inplaceUnion(rc2)
+			}
+		})
+	}
 }
