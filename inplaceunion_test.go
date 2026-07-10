@@ -146,6 +146,32 @@ func TestRunContainer16InplaceUnionAdversarialLarge(t *testing.T) {
 	}
 }
 
+func TestRunContainer16InplaceUnionAdversarialWrapped(t *testing.T) {
+	rc1 := &runContainer16{
+		iv: []interval16{newInterval16Range(5, 5)},
+	}
+	// Construct a wrapped interval16 directly:
+	// start = 65000, length = 1000 => last() = 464, which is < start.
+	wrappedIv := interval16{start: 65000, length: 1000}
+	rc2 := &runContainer16{
+		iv: []interval16{
+			wrappedIv,
+			newInterval16Range(500, 510),
+		},
+	}
+
+	res := rc1.inplaceUnion(rc2)
+	resRc, ok := res.(*runContainer16)
+	if ok {
+		for i := range resRc.iv {
+			assert.True(t, resRc.iv[i].start <= resRc.iv[i].last())
+			if i > 0 {
+				assert.True(t, int(resRc.iv[i-1].last())+1 < int(resRc.iv[i].start), "Merged intervals must be sorted and non-contiguous")
+			}
+		}
+	}
+}
+
 func containerToSlice(c container) []uint16 {
 	it := c.getShortIterator()
 	var res []uint16

@@ -2267,6 +2267,14 @@ func (rc *runContainer16) ior(a container) container {
 }
 
 func (rc *runContainer16) inplaceUnion(rc2 *runContainer16) container {
+	if len(rc2.iv) == 0 {
+		return rc.toEfficientContainer()
+	}
+	if len(rc.iv) == 0 {
+		rc.iv = append([]interval16(nil), rc2.iv...)
+		return rc.toEfficientContainer()
+	}
+
 	if len(rc2.iv) == 1 && rc2.iv[0].runlen() <= 4 {
 		for i := int(rc2.iv[0].start); i <= int(rc2.iv[0].last()); i++ {
 			rc.Add(uint16(i))
@@ -2275,24 +2283,140 @@ func (rc *runContainer16) inplaceUnion(rc2 *runContainer16) container {
 	}
 
 	isSortedAndValid := true
-	for i := 1; i < len(rc2.iv); i++ {
-		if int(rc2.iv[i-1].last())+1 >= int(rc2.iv[i].start) {
+	for i := 0; i < len(rc2.iv); i++ {
+		if rc2.iv[i].start > rc2.iv[i].last() {
 			isSortedAndValid = false
 			break
 		}
+		if i > 0 {
+			if int(rc2.iv[i-1].last())+1 >= int(rc2.iv[i].start) {
+				isSortedAndValid = false
+				break
+			}
+		}
 	}
 
-	if isSortedAndValid {
-		rc.iv = rc.union(rc2).iv
+	if !isSortedAndValid {
+		for _, p := range rc2.iv {
+			last := int(p.last())
+			for i := int(p.start); i <= last; i++ {
+				rc.Add(uint16(i))
+			}
+		}
 		return rc.toEfficientContainer()
 	}
 
-	for _, p := range rc2.iv {
-		last := int(p.last())
-		for i := int(p.start); i <= last; i++ {
-			rc.Add(uint16(i))
+	var m []interval16
+	var stackBuf [256]interval16
+	if len(rc.iv)+len(rc2.iv) <= len(stackBuf) {
+		m = stackBuf[:0]
+	} else {
+		m = make([]interval16, 0, len(rc.iv)+len(rc2.iv))
+	}
+
+	alim := len(rc.iv)
+	blim := len(rc2.iv)
+
+	var na int
+	var nb int
+
+	var merged interval16
+	var mergedUsed bool
+
+	var cura interval16
+	var curb interval16
+
+	for na < alim && nb < blim {
+		cura = rc.iv[na]
+		curb = rc2.iv[nb]
+
+		if mergedUsed {
+			mergedUpdated := false
+			if canMerge16(cura, merged) {
+				merged = mergeInterval16s(cura, merged)
+				na = rc.indexOfIntervalAtOrAfter(int(merged.last())+1, na+1)
+				mergedUpdated = true
+			}
+			if canMerge16(curb, merged) {
+				merged = mergeInterval16s(curb, merged)
+				nb = rc2.indexOfIntervalAtOrAfter(int(merged.last())+1, nb+1)
+				mergedUpdated = true
+			}
+			if !mergedUpdated {
+				m = append(m, merged)
+				mergedUsed = false
+			}
+			continue
+		} else {
+			if !canMerge16(cura, curb) {
+				if cura.start < curb.start {
+					m = append(m, cura)
+					na++
+				} else {
+					m = append(m, curb)
+					nb++
+				}
+			} else {
+				merged = mergeInterval16s(cura, curb)
+				mergedUsed = true
+				na = rc.indexOfIntervalAtOrAfter(int(merged.last())+1, na+1)
+				nb = rc2.indexOfIntervalAtOrAfter(int(merged.last())+1, nb+1)
+			}
 		}
 	}
+
+	var aDone, bDone bool
+	if na >= alim {
+		aDone = true
+	}
+	if nb >= blim {
+		bDone = true
+	}
+
+	if mergedUsed {
+		if !aDone {
+		aAdds:
+			for na < alim {
+				cura = rc.iv[na]
+				if canMerge16(cura, merged) {
+					merged = mergeInterval16s(cura, merged)
+					na = rc.indexOfIntervalAtOrAfter(int(merged.last())+1, na+1)
+				} else {
+					break aAdds
+				}
+			}
+		}
+
+		if !bDone {
+		bAdds:
+			for nb < blim {
+				curb = rc2.iv[nb]
+				if canMerge16(curb, merged) {
+					merged = mergeInterval16s(curb, merged)
+					nb = rc2.indexOfIntervalAtOrAfter(int(merged.last())+1, nb+1)
+				} else {
+					break bAdds
+				}
+			}
+		}
+
+		m = append(m, merged)
+	}
+
+	if na < alim {
+		m = append(m, rc.iv[na:]...)
+	}
+	if nb < blim {
+		m = append(m, rc2.iv[nb:]...)
+	}
+
+	if cap(rc.iv) >= len(m) {
+		rc.iv = rc.iv[:len(m)]
+		copy(rc.iv, m)
+	} else {
+		rc.iv = append([]interval16(nil), m...)
+	}
+
 	return rc.toEfficientContainer()
 }
 
