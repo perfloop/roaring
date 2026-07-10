@@ -900,13 +900,29 @@ func (bc *bitmapContainer) ixor(a container) container {
 }
 
 func (bc *bitmapContainer) ixorArray(value2 *arrayContainer) container {
-	vbc := value2.toBitmapContainer()
-	return bc.ixorBitmap(vbc)
+	for _, v := range value2.content {
+		bc.bitmap[uint(v)>>6] ^= (uint64(1) << (v % 64))
+	}
+	bc.computeCardinality()
+	if bc.cardinality <= arrayDefaultMaxSize {
+		return bc.toArrayContainer()
+	}
+	return bc
 }
 
 func (bc *bitmapContainer) ixorRun16(value2 *runContainer16) container {
-	rcb := value2.toBitmapContainer()
-	return bc.ixorBitmap(rcb)
+	for _, iv := range value2.iv {
+		start := uint32(iv.start)
+		end := start + uint32(iv.length) + 1
+		for i := start; i < end; i++ {
+			bc.bitmap[i>>6] ^= (uint64(1) << (i & 63))
+		}
+	}
+	bc.computeCardinality()
+	if bc.cardinality <= arrayDefaultMaxSize {
+		return bc.toArrayContainer()
+	}
+	return bc
 }
 
 func (bc *bitmapContainer) ixorBitmap(value2 *bitmapContainer) container {

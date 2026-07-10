@@ -183,26 +183,224 @@ func HeapOr(bitmaps ...*Bitmap) *Bitmap {
 	return heap.Pop(&pq).(*item).value
 }
 
-// HeapXor computes the symmetric difference between many bitmaps quickly (as opposed to calling Xor repeated).
-// Internally, this function uses a heap.
-// It might be faster than calling Xor repeatedly.
+type fastLoserPlayerXor struct {
+	key uint32
+	pos int
+	ra  *roaringArray
+}
+
+func fastXorArrayContainers(matching []container) container {
+	var buf1 [4096]uint16
+	var buf2 [4096]uint16
+
+	ac0 := matching[0].(*arrayContainer)
+	s1 := buf1[:len(ac0.content)]
+	copy(s1, ac0.content)
+
+	curBuf := 1
+	isBitmap := false
+	var bc *bitmapContainer
+
+	for i := 1; i < len(matching); i++ {
+		acNext := matching[i].(*arrayContainer)
+		if isBitmap {
+			bc.ixorArray(acNext)
+			continue
+		}
+
+		if len(s1)+len(acNext.content) > 4096 {
+			bc = newBitmapContainer()
+			for _, v := range s1 {
+				bc.bitmap[uint(v)>>6] ^= (uint64(1) << (v % 64))
+			}
+			bc.cardinality = len(s1)
+			bc.ixorArray(acNext)
+			isBitmap = true
+			continue
+		}
+
+		if curBuf == 1 {
+			s2 := buf2[:]
+			n := exclusiveUnion2by2(s1, acNext.content, s2)
+			s1 = buf2[:n]
+			curBuf = 2
+		} else {
+			s2 := buf1[:]
+			n := exclusiveUnion2by2(s1, acNext.content, s2)
+			s1 = buf1[:n]
+			curBuf = 1
+		}
+	}
+
+	if isBitmap {
+		if bc.cardinality <= arrayDefaultMaxSize {
+			return bc.toArrayContainer()
+		}
+		return bc
+	}
+
+	ans := newArrayContainerSize(len(s1))
+	copy(ans.content, s1)
+	return ans
+}
+
+func fastXorManyContainers(matching []container) container {
+	if len(matching) == 0 {
+		return nil
+	}
+	if len(matching) == 1 {
+		return matching[0].clone()
+	}
+
+	allArray := true
+	for _, c := range matching {
+		if _, ok := c.(*arrayContainer); !ok {
+			allArray = false
+			break
+		}
+	}
+
+	if allArray {
+		return fastXorArrayContainers(matching)
+	}
+
+	c := matching[0].clone()
+	for _, nextC := range matching[1:] {
+		if _, ok := nextC.(*bitmapContainer); ok {
+			if _, ok = c.(*bitmapContainer); !ok {
+				switch ac := c.(type) {
+				case *arrayContainer:
+					c = ac.toBitmapContainer()
+				case *runContainer16:
+					c = ac.toBitmapContainer()
+				}
+			}
+		}
+		c = c.ixor(nextC)
+	}
+	return c
+}
+
+// HeapXor computes the symmetric difference between many bitmaps quickly (as opposed to calling Xor repeatedly).
+// Internally, this function uses a loser tree to perform key-by-key multi-way merge.
 func HeapXor(bitmaps ...*Bitmap) *Bitmap {
 	if len(bitmaps) == 0 {
 		return NewBitmap()
+	} else if len(bitmaps) == 1 {
+		if bitmaps[0] == nil {
+			return nil
+		}
+		return bitmaps[0].Clone()
 	}
 
-	pq := make(priorityQueue, len(bitmaps))
-	for i, bm := range bitmaps {
-		pq[i] = &item{bm, i}
+	nonEmptyCount := 0
+	for _, bm := range bitmaps {
+		if bm != nil && bm.highlowcontainer.size() > 0 {
+			nonEmptyCount++
+		}
 	}
-	heap.Init(&pq)
 
-	for pq.Len() > 1 {
-		x1 := heap.Pop(&pq).(*item)
-		x2 := heap.Pop(&pq).(*item)
-		heap.Push(&pq, &item{Xor(x1.value, x2.value), 0})
+	if nonEmptyCount == 0 {
+		return NewBitmap()
+	} else if nonEmptyCount == 1 {
+		for _, bm := range bitmaps {
+			if bm != nil && bm.highlowcontainer.size() > 0 {
+				return bm.Clone()
+			}
+		}
 	}
-	return heap.Pop(&pq).(*item).value
+
+	players := make([]fastLoserPlayerXor, 0, nonEmptyCount)
+
+	for _, bm := range bitmaps {
+		if bm != nil && bm.highlowcontainer.size() > 0 {
+			ra := &bm.highlowcontainer
+			players = append(players, fastLoserPlayerXor{
+				key: uint32(ra.keys[0]),
+				pos: 0,
+				ra:  ra,
+			})
+		}
+	}
+
+	k := len(players)
+	ls := make([]int, k)
+	for i := range ls {
+		ls[i] = -1
+	}
+
+	for i := 0; i < k; i++ {
+		p := i
+		parent := (p + k) / 2
+		for parent > 0 {
+			loser := ls[parent]
+			if loser == -1 {
+				ls[parent] = p
+				break
+			}
+			if players[p].key > players[loser].key {
+				ls[parent] = p
+				p = loser
+			}
+			parent /= 2
+		}
+		if parent == 0 {
+			ls[0] = p
+		}
+	}
+
+	answer := NewBitmap()
+	matching := make([]container, 0, k)
+	matchingIters := make([]*fastLoserPlayerXor, 0, k)
+
+	for {
+		winner := ls[0]
+		minKey := players[winner].key
+		if minKey == 0xFFFFFFFF {
+			break
+		}
+
+		matching = matching[:0]
+		matchingIters = matchingIters[:0]
+
+		for players[ls[0]].key == minKey {
+			w := ls[0]
+			p := &players[w]
+			matching = append(matching, p.ra.containers[p.pos])
+			matchingIters = append(matchingIters, p)
+
+			p.pos++
+			if p.pos < len(p.ra.keys) {
+				p.key = uint32(p.ra.keys[p.pos])
+			} else {
+				p.key = 0xFFFFFFFF
+			}
+
+			curr := w
+			parent := (curr + k) / 2
+			for parent > 0 {
+				loser := ls[parent]
+				if players[curr].key > players[loser].key {
+					ls[parent] = curr
+					curr = loser
+				}
+				parent /= 2
+			}
+			ls[0] = curr
+		}
+
+		if len(matching) == 1 {
+			p := matchingIters[0]
+			answer.highlowcontainer.appendCopy(*p.ra, p.pos-1)
+		} else if len(matching) > 1 {
+			c := fastXorManyContainers(matching)
+			if !c.isEmpty() {
+				answer.highlowcontainer.appendContainer(uint16(minKey), c, false)
+			}
+		}
+	}
+
+	return answer
 }
 
 // AndAny provides a result equivalent to x1.And(FastOr(bitmaps)).
