@@ -2275,9 +2275,32 @@ func (rc *runContainer16) inplaceUnion(rc2 *runContainer16) container {
 		return rc.toEfficientContainer()
 	}
 
+	if rc2.getCardinality() <= 16 {
+		for _, p := range rc2.iv {
+			last := int(p.last())
+			for i := int(p.start); i <= last; i++ {
+				rc.Add(uint16(i))
+			}
+		}
+		return rc.toEfficientContainer()
+	}
+
 	alim := len(rc.iv)
 	blim := len(rc2.iv)
-	m := make([]interval16, 0, alim+blim)
+	maxPossibleCapacity := alim + blim
+
+	var m []interval16
+	var origIv []interval16
+
+	if cap(rc.iv) >= maxPossibleCapacity {
+		origIv = rc.iv
+		rc.iv = rc.iv[:maxPossibleCapacity]
+		copy(rc.iv[blim:alim+blim], rc.iv[0:alim])
+		rc.iv = origIv[blim : alim+blim]
+		m = origIv[:0]
+	} else {
+		m = make([]interval16, 0, maxPossibleCapacity)
+	}
 
 	var na int
 	var nb int

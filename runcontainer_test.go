@@ -2762,3 +2762,91 @@ func getRandomSameThreeContainers(tr trial) (*arrayContainer, *runContainer16, *
 
 	return ac, rc, bc
 }
+
+func TestRunContainer16InplaceUnionDirect(t *testing.T) {
+	testCases := []struct {
+		name string
+		iv1  []interval16
+		iv2  []interval16
+		want []uint16
+	}{
+		{
+			name: "Disjoint",
+			iv1:  []interval16{newInterval16Range(10, 20), newInterval16Range(50, 60)},
+			iv2:  []interval16{newInterval16Range(30, 40)},
+			want: append(append(makeRange16(10, 20), makeRange16(30, 40)...), makeRange16(50, 60)...),
+		},
+		{
+			name: "Overlapping",
+			iv1:  []interval16{newInterval16Range(10, 20)},
+			iv2:  []interval16{newInterval16Range(15, 30)},
+			want: makeRange16(10, 30),
+		},
+		{
+			name: "Nested",
+			iv1:  []interval16{newInterval16Range(10, 50)},
+			iv2:  []interval16{newInterval16Range(20, 30)},
+			want: makeRange16(10, 50),
+		},
+		{
+			name: "Adjacent",
+			iv1:  []interval16{newInterval16Range(10, 20)},
+			iv2:  []interval16{newInterval16Range(21, 30)},
+			want: makeRange16(10, 30),
+		},
+		{
+			name: "EmptyFirst",
+			iv1:  []interval16{},
+			iv2:  []interval16{newInterval16Range(10, 20)},
+			want: makeRange16(10, 20),
+		},
+		{
+			name: "EmptySecond",
+			iv1:  []interval16{newInterval16Range(10, 20)},
+			iv2:  []interval16{},
+			want: makeRange16(10, 20),
+		},
+	}
+
+	for _, tc := range testCases {
+		for _, useCap := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s_cap=%v", tc.name, useCap), func(t *testing.T) {
+				var rc1 *runContainer16
+				if useCap {
+					// Pre-allocate extra capacity
+					rc1 = &runContainer16{
+						iv: make([]interval16, len(tc.iv1), len(tc.iv1)+len(tc.iv2)),
+					}
+					copy(rc1.iv, tc.iv1)
+				} else {
+					rc1 = &runContainer16{
+						iv: append([]interval16(nil), tc.iv1...),
+					}
+				}
+				rc2 := &runContainer16{
+					iv: append([]interval16(nil), tc.iv2...),
+				}
+
+				res := rc1.inplaceUnion(rc2)
+				assert.Equal(t, tc.want, containerToSlice(res))
+			})
+		}
+	}
+}
+
+func containerToSlice(c container) []uint16 {
+	it := c.getShortIterator()
+	var res []uint16
+	for it.hasNext() {
+		res = append(res, it.next())
+	}
+	return res
+}
+
+func makeRange16(start, end uint16) []uint16 {
+	res := make([]uint16, 0, end-start+1)
+	for i := start; i <= end; i++ {
+		res = append(res, i)
+	}
+	return res
+}
