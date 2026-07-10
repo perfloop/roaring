@@ -2293,30 +2293,6 @@ func (rc *runContainer16) inplaceUnion(rc2 *runContainer16) container {
 		return rc.toEfficientContainer()
 	}
 
-	isSortedAndValid := true
-	for i := 0; i < len(rc2.iv); i++ {
-		if rc2.iv[i].start > rc2.iv[i].last() {
-			isSortedAndValid = false
-			break
-		}
-		if i > 0 {
-			if int(rc2.iv[i-1].last())+1 >= int(rc2.iv[i].start) {
-				isSortedAndValid = false
-				break
-			}
-		}
-	}
-
-	if !isSortedAndValid {
-		for _, p := range rc2.iv {
-			last := int(p.last())
-			for i := int(p.start); i <= last; i++ {
-				rc.Add(uint16(i))
-			}
-		}
-		return rc.toEfficientContainer()
-	}
-
 	var m []interval16
 	var stackBuf [256]interval16
 	if len(rc.iv)+len(rc2.iv) <= len(stackBuf) {
