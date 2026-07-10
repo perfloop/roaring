@@ -912,16 +912,13 @@ func (bc *bitmapContainer) ixorArray(value2 *arrayContainer) container {
 
 func (bc *bitmapContainer) ixorRun16(value2 *runContainer16) container {
 	for _, iv := range value2.iv {
-		start := uint32(iv.start)
-		end := start + uint32(iv.length) + 1
+		start := int(iv.start)
+		end := start + int(iv.length) + 1
 		if end > 65536 {
 			end = 65536
 		}
-		for i := start; i < end; i++ {
-			bc.bitmap[i>>6] ^= (uint64(1) << (i & 63))
-		}
+		bc.cardinality += flipBitmapRangeAndCardinalityChange(bc.bitmap, start, end)
 	}
-	bc.computeCardinality()
 	if bc.cardinality <= arrayDefaultMaxSize {
 		return bc.toArrayContainer()
 	}
