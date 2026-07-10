@@ -808,7 +808,7 @@ func (b *BSI) shouldUseParallelScan(vals []uint64, bitCount int) bool {
 	// Bounding the lower and upper cardinality limits guarantees efficiency and protects
 	// against resource/memory amplification (OOM) on extremely high cardinality queries.
 	card := b.eBM.GetCardinality()
-	if card < 100000 || card > 5000000 {
+	if card < 100000 {
 		return false
 	}
 	return true
