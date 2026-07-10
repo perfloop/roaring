@@ -2317,7 +2317,7 @@ func (rc *runContainer16) inplaceUnion(rc2 *runContainer16) container {
 	} else {
 		for _, p := range rc2.iv {
 			card2 += p.runlen()
-			if card2*8 >= len(rc.iv) {
+			if card2 > 4 && card2*8 >= len(rc.iv) {
 				break
 			}
 		}
