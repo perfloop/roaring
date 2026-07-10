@@ -244,7 +244,7 @@ func HeapXor(bitmaps ...*Bitmap) *Bitmap {
 	}
 
 	// Use pairwise heap reduction for very small or very large inputs
-	// where sorting overhead or active min-heap maintenance dominates.
+	// where sorting overhead or active min-heap maintenance dominates. Pairwise is optimal here.
 	if nonEmptyCount <= 4 || nonEmptyCount > 64 {
 		pq := make(priorityQueue, 0, nonEmptyCount)
 		for _, bm := range bitmaps {
