@@ -2271,8 +2271,7 @@ func (rc *runContainer16) inplaceUnion(rc2 *runContainer16) container {
 		return rc.toEfficientContainer()
 	}
 
-	// 1. Ultra-fast path for tiny single-interval additions to completely bypass
-	// all validation scans, cardinality loops, and state overhead on the hot path.
+	// Fast-path for small single-interval additions
 	if len(rc2.iv) == 1 && rc2.iv[0].runlen() <= 4 {
 		last := int(rc2.iv[0].last())
 		if rc2.iv[0].start <= rc2.iv[0].last() {
