@@ -183,26 +183,141 @@ func HeapOr(bitmaps ...*Bitmap) *Bitmap {
 	return heap.Pop(&pq).(*item).value
 }
 
+type xorKeyIter struct {
+	ra  *roaringArray
+	pos int
+}
+
+type xorHeapItem struct {
+	key uint16
+	it  *xorKeyIter
+}
+
+func heapifyXor(heap []xorHeapItem, i int) {
+	n := len(heap)
+	temp := heap[i]
+	for {
+		child := 2*i + 1
+		if child >= n {
+			break
+		}
+		if child+1 < n && heap[child+1].key < heap[child].key {
+			child++
+		}
+		if temp.key <= heap[child].key {
+			break
+		}
+		heap[i] = heap[child]
+		i = child
+	}
+	heap[i] = temp
+}
+
 // HeapXor computes the symmetric difference between many bitmaps quickly (as opposed to calling Xor repeated).
-// Internally, this function uses a heap.
-// It might be faster than calling Xor repeatedly.
+// Internally, this function uses a single-pass multi-way sorted merge over container keys.
+// It is significantly faster and avoids intermediate Bitmap allocations.
 func HeapXor(bitmaps ...*Bitmap) *Bitmap {
 	if len(bitmaps) == 0 {
 		return NewBitmap()
+	} else if len(bitmaps) == 1 {
+		return bitmaps[0].Clone()
 	}
 
-	pq := make(priorityQueue, len(bitmaps))
-	for i, bm := range bitmaps {
-		pq[i] = &item{bm, i}
+	nonEmptyCount := 0
+	for _, bm := range bitmaps {
+		if bm != nil && bm.highlowcontainer.size() > 0 {
+			nonEmptyCount++
+		}
 	}
-	heap.Init(&pq)
 
-	for pq.Len() > 1 {
-		x1 := heap.Pop(&pq).(*item)
-		x2 := heap.Pop(&pq).(*item)
-		heap.Push(&pq, &item{Xor(x1.value, x2.value), 0})
+	if nonEmptyCount == 0 {
+		return NewBitmap()
+	} else if nonEmptyCount == 1 {
+		for _, bm := range bitmaps {
+			if bm != nil && bm.highlowcontainer.size() > 0 {
+				return bm.Clone()
+			}
+		}
 	}
-	return heap.Pop(&pq).(*item).value
+
+	iters := make([]xorKeyIter, 0, nonEmptyCount)
+	heap := make([]xorHeapItem, 0, nonEmptyCount)
+
+	for _, bm := range bitmaps {
+		if bm != nil && bm.highlowcontainer.size() > 0 {
+			ra := &bm.highlowcontainer
+			it := xorKeyIter{
+				ra:  ra,
+				pos: 0,
+			}
+			iters = append(iters, it)
+		}
+	}
+
+	for i := range iters {
+		heap = append(heap, xorHeapItem{
+			key: iters[i].ra.keys[0],
+			it:  &iters[i],
+		})
+	}
+
+	for i := len(heap)/2 - 1; i >= 0; i-- {
+		heapifyXor(heap, i)
+	}
+
+	answer := NewBitmap()
+	matching := make([]container, 0, nonEmptyCount)
+	matchingIters := make([]*xorKeyIter, 0, nonEmptyCount)
+
+	for len(heap) > 0 {
+		minKey := heap[0].key
+		matching = matching[:0]
+		matchingIters = matchingIters[:0]
+
+		for len(heap) > 0 && heap[0].key == minKey {
+			item := &heap[0]
+			it := item.it
+			matching = append(matching, it.ra.containers[it.pos])
+			matchingIters = append(matchingIters, it)
+
+			it.pos++
+			if it.pos < len(it.ra.keys) {
+				item.key = it.ra.keys[it.pos]
+				heapifyXor(heap, 0)
+			} else {
+				heap[0] = heap[len(heap)-1]
+				heap = heap[:len(heap)-1]
+				if len(heap) > 0 {
+					heapifyXor(heap, 0)
+				}
+			}
+		}
+
+		if len(matching) == 1 {
+			it := matchingIters[0]
+			answer.highlowcontainer.appendCopy(*it.ra, it.pos-1)
+		} else if len(matching) > 1 {
+			c := matching[0].clone()
+			for _, nextC := range matching[1:] {
+				if _, ok := nextC.(*bitmapContainer); ok {
+					if _, ok = c.(*bitmapContainer); !ok {
+						switch ac := c.(type) {
+						case *arrayContainer:
+							c = ac.toBitmapContainer()
+						case *runContainer16:
+							c = ac.toBitmapContainer()
+						}
+					}
+				}
+				c = c.ixor(nextC)
+			}
+			if !c.isEmpty() {
+				answer.highlowcontainer.appendContainer(minKey, c, false)
+			}
+		}
+	}
+
+	return answer
 }
 
 // AndAny provides a result equivalent to x1.And(FastOr(bitmaps)).
