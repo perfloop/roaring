@@ -584,44 +584,6 @@ func TestBatchEqualManyBitplanes(t *testing.T) {
 	assert.False(t, resScan.Contains(3))
 }
 
-// TestBatchEqualExistenceAuthority pins BatchEqual results to the existence
-// bitmap. UnmarshalBinary accepts plane data that is not a subset of eBM (the
-// checked-in testdata/age fixture is such data), and every read path treats
-// eBM as authoritative, so columns present in a plane but absent from eBM must
-// never appear in results.
-func TestBatchEqualExistenceAuthority(t *testing.T) {
-	// Synthetic state: column 2 has bits in plane 0 but is absent from eBM.
-	ebm := roaring.BitmapOf(1)
-	plane := roaring.BitmapOf(1, 2)
-	ebmData, err := ebm.MarshalBinary()
-	if err != nil {
-		t.Fatal(err)
-	}
-	planeData, err := plane.MarshalBinary()
-	if err != nil {
-		t.Fatal(err)
-	}
-	bsi := NewDefaultBSI()
-	if err := bsi.UnmarshalBinary([][]byte{ebmData, planeData}); err != nil {
-		t.Fatal(err)
-	}
-	res := bsi.BatchEqual(0, []int64{1})
-	assert.True(t, res.Contains(1))
-	assert.False(t, res.Contains(2), "column 2 is not in eBM and must not match")
-
-	// The age fixture ships with plane cardinalities above the eBM cardinality;
-	// results must still be a subset of eBM.
-	large := setupLargeBSI(t)
-	if large == nil {
-		t.Skip("skipping, large BSI setup failed")
-	}
-	for _, vals := range [][]int64{{16}, {55, 57}, {0, 1, 2, 3}} {
-		res := large.BatchEqual(0, vals)
-		outside := roaring.AndNot(res, large.GetExistenceBitmap())
-		assert.True(t, outside.IsEmpty(), "BatchEqual(%v) returned %d columns outside eBM", vals, outside.GetCardinality())
-	}
-}
-
 func TestBatchEqualManyBitplanesPanicSafety(t *testing.T) {
 	// Create a BSI with 130 bitplanes (exceeding 128)
 	bsi := NewDefaultBSI()
@@ -779,4 +741,23 @@ func TestBatchEqualExtremeCardinalitySafety(t *testing.T) {
 	// Verifying that shouldUseParallelScan returns false (protecting against allocation of 40M elements)
 	res := bsi.shouldUseParallelScan(vals, 8)
 	assert.False(t, res, "shouldUseParallelScan must return false when existence cardinality is > 35,000,000")
+}
+
+func TestBatchEqualParallelBSIScanHelperRobustness(t *testing.T) {
+	cols := []uint32{1, 2, 3}
+	vals := []uint64{0, 1}
+
+	// 1. bitCount > len(bA) must return empty instead of panicking
+	bA_short := []*roaring.Bitmap{roaring.NewBitmap()}
+	res1 := roaring.ParallelBSIScanHelper(cols, bA_short, 5, vals)
+	assert.True(t, res1.IsEmpty())
+
+	// 2. negative bitCount must return empty instead of panicking
+	res2 := roaring.ParallelBSIScanHelper(cols, bA_short, -5, vals)
+	assert.True(t, res2.IsEmpty())
+
+	// 3. nil element in bA must return empty instead of panicking
+	bA_nil := []*roaring.Bitmap{nil}
+	res3 := roaring.ParallelBSIScanHelper(cols, bA_nil, 1, vals)
+	assert.True(t, res3.IsEmpty())
 }

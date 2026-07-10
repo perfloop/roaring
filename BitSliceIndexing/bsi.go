@@ -797,10 +797,6 @@ func (b *BSI) shouldUseParallelScan(vals []uint64, bitCount int) bool {
 	if vals[len(vals)-1]-vals[0] == uint64(len(vals)-1) {
 		return false
 	}
-	// If existence bitmap has only 1 container, sequential trie walk is already very fast.
-	if b.eBM.GetContainerCount() < 2 {
-		return false
-	}
 	// Verify if the unique query values split frequently to cause a branch blowup on the trie.
 	if estimateBranchCount(vals, bitCount-1, 64) < 64 {
 		return false
@@ -826,25 +822,18 @@ func estimateBranchCount(vals []uint64, p int, limit int) int {
 		p = 63
 	}
 
-	// Partition vals into those with the p-th bit set to 0 and 1.
 	mask := uint64(1) << uint(p)
-	var left, right []uint64
-	for _, v := range vals {
-		if v&mask == 0 {
-			left = append(left, v)
-		} else {
-			right = append(right, v)
-		}
-	}
-
-	if len(left) == 0 || len(right) == 0 {
+	cut := sort.Search(len(vals), func(i int) bool {
+		return vals[i]&mask != 0
+	})
+	if cut == 0 || cut == len(vals) {
 		return estimateBranchCount(vals, p-1, limit)
 	}
 
 	leftLimit := limit - 1
-	leftBranch := estimateBranchCount(left, p-1, leftLimit)
+	leftBranch := estimateBranchCount(vals[:cut], p-1, leftLimit)
 	rightLimit := leftLimit - leftBranch
-	rightBranch := estimateBranchCount(right, p-1, rightLimit)
+	rightBranch := estimateBranchCount(vals[cut:], p-1, rightLimit)
 	return 1 + leftBranch + rightBranch
 }
 

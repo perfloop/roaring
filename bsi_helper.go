@@ -26,6 +26,15 @@ type activeContState struct {
 //
 // Normal library users should not call this function directly.
 func ParallelBSIScanHelper(cols []uint32, bA []*Bitmap, bitCount int, vals []uint64) *Bitmap {
+	if bitCount < 0 || bitCount > len(bA) {
+		return NewBitmap()
+	}
+	for p := 0; p < bitCount; p++ {
+		if bA[p] == nil {
+			return NewBitmap()
+		}
+	}
+
 	// Guard the sorted column ID assumption
 	for i := 1; i < len(cols); i++ {
 		if cols[i] < cols[i-1] {
