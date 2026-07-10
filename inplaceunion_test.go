@@ -9,46 +9,53 @@ import (
 
 func TestRunContainer16InplaceUnionDirect(t *testing.T) {
 	testCases := []struct {
-		name string
-		iv1  []interval16
-		iv2  []interval16
-		want []uint16
+		name   string
+		iv1    []interval16
+		iv2    []interval16
+		wantIv []interval16
+		want   []uint16
 	}{
 		{
-			name: "Disjoint",
-			iv1:  []interval16{newInterval16Range(10, 20), newInterval16Range(50, 60)},
-			iv2:  []interval16{newInterval16Range(30, 40)},
-			want: append(append(makeRange16(10, 20), makeRange16(30, 40)...), makeRange16(50, 60)...),
+			name:   "Disjoint",
+			iv1:    []interval16{newInterval16Range(10, 20), newInterval16Range(50, 60)},
+			iv2:    []interval16{newInterval16Range(30, 40)},
+			wantIv: []interval16{newInterval16Range(10, 20), newInterval16Range(30, 40), newInterval16Range(50, 60)},
+			want:   append(append(makeRange16(10, 20), makeRange16(30, 40)...), makeRange16(50, 60)...),
 		},
 		{
-			name: "Overlapping",
-			iv1:  []interval16{newInterval16Range(10, 20)},
-			iv2:  []interval16{newInterval16Range(15, 30)},
-			want: makeRange16(10, 30),
+			name:   "Overlapping",
+			iv1:    []interval16{newInterval16Range(10, 20)},
+			iv2:    []interval16{newInterval16Range(15, 30)},
+			wantIv: []interval16{newInterval16Range(10, 30)},
+			want:   makeRange16(10, 30),
 		},
 		{
-			name: "Nested",
-			iv1:  []interval16{newInterval16Range(10, 50)},
-			iv2:  []interval16{newInterval16Range(20, 30)},
-			want: makeRange16(10, 50),
+			name:   "Nested",
+			iv1:    []interval16{newInterval16Range(10, 50)},
+			iv2:    []interval16{newInterval16Range(20, 30)},
+			wantIv: []interval16{newInterval16Range(10, 50)},
+			want:   makeRange16(10, 50),
 		},
 		{
-			name: "Adjacent",
-			iv1:  []interval16{newInterval16Range(10, 20)},
-			iv2:  []interval16{newInterval16Range(21, 30)},
-			want: makeRange16(10, 30),
+			name:   "Adjacent",
+			iv1:    []interval16{newInterval16Range(10, 20)},
+			iv2:    []interval16{newInterval16Range(21, 30)},
+			wantIv: []interval16{newInterval16Range(10, 30)},
+			want:   makeRange16(10, 30),
 		},
 		{
-			name: "EmptyFirst",
-			iv1:  []interval16{},
-			iv2:  []interval16{newInterval16Range(10, 20)},
-			want: makeRange16(10, 20),
+			name:   "EmptyFirst",
+			iv1:    []interval16{},
+			iv2:    []interval16{newInterval16Range(10, 20)},
+			wantIv: []interval16{newInterval16Range(10, 20)},
+			want:   makeRange16(10, 20),
 		},
 		{
-			name: "EmptySecond",
-			iv1:  []interval16{newInterval16Range(10, 20)},
-			iv2:  []interval16{},
-			want: makeRange16(10, 20),
+			name:   "EmptySecond",
+			iv1:    []interval16{newInterval16Range(10, 20)},
+			iv2:    []interval16{},
+			wantIv: []interval16{newInterval16Range(10, 20)},
+			want:   makeRange16(10, 20),
 		},
 	}
 
@@ -72,8 +79,44 @@ func TestRunContainer16InplaceUnionDirect(t *testing.T) {
 
 				res := rc1.inplaceUnion(rc2)
 				assert.Equal(t, tc.want, containerToSlice(res))
+
+				// Directly assert structural interval equivalence
+				resRc, ok := res.(*runContainer16)
+				if ok {
+					assert.Equal(t, tc.wantIv, resRc.iv)
+					// Also verify that it passes our structural invariants check
+					for i := range resRc.iv {
+						assert.True(t, resRc.iv[i].start <= resRc.iv[i].last())
+						if i > 0 {
+							assert.True(t, resRc.iv[i-1].last()+1 < resRc.iv[i].start, "Merged intervals must be sorted and non-contiguous")
+						}
+					}
+				}
 			})
 		}
+	}
+}
+
+func TestRunContainer16InplaceUnionAdversarial(t *testing.T) {
+	// rc2 has unsorted/overlapping intervals: [30, 30] followed by [10, 10]
+	rc1 := &runContainer16{
+		iv: []interval16{newInterval16Range(5, 5)},
+	}
+	rc2 := &runContainer16{
+		iv: []interval16{newInterval16Range(30, 30), newInterval16Range(10, 10)},
+	}
+
+	res := rc1.inplaceUnion(rc2)
+	want := []uint16{5, 10, 30}
+	assert.Equal(t, want, containerToSlice(res))
+
+	// Verify that the resulting container's intervals are structurally sorted and non-overlapping
+	resRc, ok := res.(*runContainer16)
+	if ok {
+		assert.Equal(t, 3, len(resRc.iv))
+		assert.Equal(t, uint16(5), resRc.iv[0].start)
+		assert.Equal(t, uint16(10), resRc.iv[1].start)
+		assert.Equal(t, uint16(30), resRc.iv[2].start)
 	}
 }
 
@@ -136,6 +179,36 @@ func BenchmarkRunContainerInplaceUnion(b *testing.B) {
 	b.Run("SparseAdd", func(b *testing.B) {
 		iv2Sparse := []interval16{
 			newInterval16Range(50, 50),
+		}
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			rc := &runContainer16{
+				iv: make([]interval16, len(iv1Dense), len(iv1Dense)+len(iv2Sparse)),
+			}
+			copy(rc.iv, iv1Dense)
+			rc2 := &runContainer16{iv: iv2Sparse}
+			_ = rc.inplaceUnion(rc2)
+		}
+	})
+
+	b.Run("SparseAdd_Card15", func(b *testing.B) {
+		iv2Sparse := []interval16{
+			newInterval16Range(50, 64), // Cardinality 15
+		}
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			rc := &runContainer16{
+				iv: make([]interval16, len(iv1Dense), len(iv1Dense)+len(iv2Sparse)),
+			}
+			copy(rc.iv, iv1Dense)
+			rc2 := &runContainer16{iv: iv2Sparse}
+			_ = rc.inplaceUnion(rc2)
+		}
+	})
+
+	b.Run("SparseAdd_Card17", func(b *testing.B) {
+		iv2Sparse := []interval16{
+			newInterval16Range(50, 66), // Cardinality 17
 		}
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
