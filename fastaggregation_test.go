@@ -265,3 +265,36 @@ func TestFastAggregationsAndAny(t *testing.T) {
 
 	assert.True(t, fast.Equals(orFirst))
 }
+
+func TestHeapXorNoMutation(t *testing.T) {
+	// Create a sparse bitmap (arrayContainer)
+	rb_sparse := NewBitmap()
+	rb_sparse.Add(1)
+	rb_sparse.Add(2)
+
+	// Create a dense bitmap (bitmapContainer, with > 4096 values in chunk 0)
+	rb_dense := NewBitmap()
+	for i := uint32(0); i < 5000; i++ {
+		rb_dense.Add(i * 2)
+	}
+
+	// Make clones of the inputs to verify they are not mutated
+	rb_sparse_clone := rb_sparse.Clone()
+	rb_dense_clone := rb_dense.Clone()
+
+	// 1. Test order (sparse, dense)
+	res1 := HeapXor(rb_sparse, rb_dense)
+	expected1 := Xor(rb_sparse_clone, rb_dense_clone)
+
+	assert.True(t, res1.Equals(expected1))
+	assert.True(t, rb_sparse.Equals(rb_sparse_clone), "rb_sparse was mutated!")
+	assert.True(t, rb_dense.Equals(rb_dense_clone), "rb_dense was mutated!")
+
+	// 2. Test order (dense, sparse)
+	res2 := HeapXor(rb_dense, rb_sparse)
+	expected2 := Xor(rb_dense_clone, rb_sparse_clone)
+
+	assert.True(t, res2.Equals(expected2))
+	assert.True(t, rb_sparse.Equals(rb_sparse_clone), "rb_sparse was mutated in dense-sparse order!")
+	assert.True(t, rb_dense.Equals(rb_dense_clone), "rb_dense was mutated in dense-sparse order!")
+}
