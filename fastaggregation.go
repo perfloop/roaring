@@ -243,6 +243,23 @@ func HeapXor(bitmaps ...*Bitmap) *Bitmap {
 		}
 	}
 
+	if nonEmptyCount <= 4 {
+		pq := make(priorityQueue, 0, nonEmptyCount)
+		for _, bm := range bitmaps {
+			if bm != nil && bm.highlowcontainer.size() > 0 {
+				pq = append(pq, &item{bm, len(pq)})
+			}
+		}
+		heap.Init(&pq)
+
+		for pq.Len() > 1 {
+			x1 := heap.Pop(&pq).(*item)
+			x2 := heap.Pop(&pq).(*item)
+			heap.Push(&pq, &item{Xor(x1.value, x2.value), 0})
+		}
+		return heap.Pop(&pq).(*item).value
+	}
+
 	iters := make([]xorKeyIter, 0, nonEmptyCount)
 	heap := make([]xorHeapItem, 0, nonEmptyCount)
 

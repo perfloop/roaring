@@ -305,3 +305,51 @@ func TestHeapXorNilInput(t *testing.T) {
 		assert.Nil(t, res)
 	})
 }
+
+func TestHeapXorDifferentialDeserialized(t *testing.T) {
+	// Create several bitmaps with different container types (array, bitmap, run)
+	rb1 := NewBitmap()
+	rb1.Add(1)
+	rb1.Add(2)
+	rb1.Add(3)
+
+	rb2 := NewBitmap()
+	for i := uint32(100); i < 5000; i++ {
+		rb2.Add(i)
+	}
+
+	rb3 := NewBitmap()
+	for i := uint32(100000); i < 110000; i++ {
+		rb3.Add(i)
+	}
+	rb3.RunOptimize()
+
+	// Serialize them to bytes
+	buf1, err := rb1.MarshalBinary()
+	assert.Nil(t, err)
+	buf2, err := rb2.MarshalBinary()
+	assert.Nil(t, err)
+	buf3, err := rb3.MarshalBinary()
+	assert.Nil(t, err)
+
+	// Deserialize into new bitmaps
+	drb1 := NewBitmap()
+	err = drb1.UnmarshalBinary(buf1)
+	assert.Nil(t, err)
+
+	drb2 := NewBitmap()
+	err = drb2.UnmarshalBinary(buf2)
+	assert.Nil(t, err)
+
+	drb3 := NewBitmap()
+	err = drb3.UnmarshalBinary(buf3)
+	assert.Nil(t, err)
+
+	// Perform HeapXor on deserialized bitmaps
+	res := HeapXor(drb1, drb2, drb3)
+
+	// Compute expected result via sequential Xor
+	expected := Xor(Xor(rb1, rb2), rb3)
+
+	assert.True(t, res.Equals(expected), "Differential result of HeapXor on deserialized bitmaps does not match expected sequential Xor")
+}
