@@ -301,10 +301,9 @@ func (bc *bitmapContainer) fillLeastSignificant16bits(x []uint32, i int, mask ui
 	for k := 0; k < len(bc.bitmap); k++ {
 		bitset := bc.bitmap[k]
 		for bitset != 0 {
-			t := bitset & -bitset
-			x[pos] = base + uint32(popcount(t-1))
+			x[pos] = base + uint32(bits.TrailingZeros64(bitset))
 			pos++
-			bitset ^= t
+			bitset &= bitset - 1
 		}
 		base += 64
 	}
