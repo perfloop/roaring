@@ -1,0 +1,28 @@
+package roaring
+
+import "testing"
+
+func BenchmarkRunContainerInplaceUnion(b *testing.B) {
+	iv1 := []interval16{
+		newInterval16Range(100, 5000),
+		newInterval16Range(10000, 15000),
+		newInterval16Range(20000, 25000),
+		newInterval16Range(30000, 35000),
+		newInterval16Range(40000, 45000),
+	}
+	iv2 := []interval16{
+		newInterval16Range(50, 4000),
+		newInterval16Range(12000, 16000),
+		newInterval16Range(22000, 26000),
+		newInterval16Range(32000, 36000),
+		newInterval16Range(42000, 46000),
+	}
+	rc1 := &runContainer16{iv: iv1}
+	rc2 := &runContainer16{iv: iv2}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		rc := rc1.Clone()
+		_ = rc.inplaceUnion(rc2)
+	}
+}
