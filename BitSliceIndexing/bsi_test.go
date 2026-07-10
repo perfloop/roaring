@@ -706,11 +706,10 @@ func TestBatchEqualParallelScanCheckedInFixture(t *testing.T) {
 		t.Skip("skipping, large BSI setup failed")
 	}
 
-	// Generate a query that triggers the parallel scan path (e.g. 130 scattered values)
-	rg := rand.New(rand.NewSource(12345))
+	// Generate a query with 130 unique scattered values to trigger the parallel scan path
 	vals := make([]int64, 130)
 	for i := range vals {
-		vals[i] = rg.Int63n(100)
+		vals[i] = int64(i) * 5
 	}
 
 	// Result from the fallback path (either automatically triggered or explicitly run)
@@ -763,25 +762,21 @@ func TestBatchEqualUnsortedInputsSafety(t *testing.T) {
 
 func TestBatchEqualExtremeCardinalitySafety(t *testing.T) {
 	bsi := NewDefaultBSI()
-	// Mock a high existence cardinality of 10,000,000
+	// Mock a high existence cardinality of 40,000,000
 	bsi.eBM.Add(1)
-	bsi.eBM.Add(10000000)
+	bsi.eBM.Add(40000000)
 
-	// Since cardinality is checked from GetCardinality, we can mock/set up values or check shouldUseParallelScan directly.
-	// We want to ensure shouldUseParallelScan returns false when cardinality exceeds 5,000,000.
+	// We want to ensure shouldUseParallelScan returns false when cardinality exceeds 35,000,000.
 	vals := make([]uint64, 130)
 	for i := range vals {
 		vals[i] = uint64(i) * 5
 	}
 
-	// Mock the cardinality of the existence bitmap without actually adding 10M elements
-	// Wait, we can't easily mock eBM.GetCardinality() directly because it's a real roaring.Bitmap,
-	// but adding 5,000,001 individual elements might be slow.
-	// Actually, we can add a range: roaring.Bitmap's AddRange can add 6,000,000 elements in O(1) time and memory!
-	bsi.eBM.AddRange(0, 6000000)
-	assert.Equal(t, uint64(6000001), bsi.eBM.GetCardinality())
+	// Mock the cardinality of the existence bitmap to exceed 35,000,000 using AddRange
+	bsi.eBM.AddRange(0, 40000000)
+	assert.Equal(t, uint64(40000001), bsi.eBM.GetCardinality())
 
-	// Verifying that shouldUseParallelScan returns false (protecting against allocation of 6M elements)
+	// Verifying that shouldUseParallelScan returns false (protecting against allocation of 40M elements)
 	res := bsi.shouldUseParallelScan(vals, 8)
-	assert.False(t, res, "shouldUseParallelScan must return false when existence cardinality is > 5,000,000")
+	assert.False(t, res, "shouldUseParallelScan must return false when existence cardinality is > 35,000,000")
 }

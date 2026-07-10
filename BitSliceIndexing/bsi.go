@@ -808,14 +808,14 @@ func (b *BSI) shouldUseParallelScan(vals []uint64, bitCount int) bool {
 	// Bounding the lower and upper cardinality limits guarantees efficiency and protects
 	// against resource/memory amplification (OOM) on extremely high cardinality queries.
 	card := b.eBM.GetCardinality()
-	if card < 100000 {
+	if card < 100000 || card > 35000000 {
 		return false
 	}
 	return true
 }
 
 func estimateBranchCount(vals []uint64, p int, limit int) int {
-	if len(vals) <= 1 || limit <= 0 {
+	if len(vals) <= 1 || limit <= 0 || p < 0 {
 		return 0
 	}
 	// Quick O(1) check: if the values are perfectly contiguous, branch count is 0
@@ -825,20 +825,26 @@ func estimateBranchCount(vals []uint64, p int, limit int) int {
 	if p >= 64 {
 		p = 63
 	}
-	if p < 0 || (p < 63 && uint64(len(vals)) == uint64(1)<<uint(p+1)) {
-		return 0
-	}
+
+	// Partition vals into those with the p-th bit set to 0 and 1.
 	mask := uint64(1) << uint(p)
-	cut := sort.Search(len(vals), func(i int) bool {
-		return vals[i]&mask != 0
-	})
-	if cut == 0 || cut == len(vals) {
+	var left, right []uint64
+	for _, v := range vals {
+		if v&mask == 0 {
+			left = append(left, v)
+		} else {
+			right = append(right, v)
+		}
+	}
+
+	if len(left) == 0 || len(right) == 0 {
 		return estimateBranchCount(vals, p-1, limit)
 	}
+
 	leftLimit := limit - 1
-	leftBranch := estimateBranchCount(vals[:cut], p-1, leftLimit)
+	leftBranch := estimateBranchCount(left, p-1, leftLimit)
 	rightLimit := leftLimit - leftBranch
-	rightBranch := estimateBranchCount(vals[cut:], p-1, rightLimit)
+	rightBranch := estimateBranchCount(right, p-1, rightLimit)
 	return 1 + leftBranch + rightBranch
 }
 
