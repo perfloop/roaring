@@ -2271,6 +2271,18 @@ func (rc *runContainer16) inplaceUnion(rc2 *runContainer16) container {
 		return rc.toEfficientContainer()
 	}
 
+	// 1. Ultra-fast path for tiny single-interval additions to completely bypass
+	// all validation scans, cardinality loops, and state overhead on the hot path.
+	if len(rc2.iv) == 1 && rc2.iv[0].runlen() <= 4 {
+		last := int(rc2.iv[0].last())
+		if rc2.iv[0].start <= rc2.iv[0].last() {
+			for i := int(rc2.iv[0].start); i <= last; i++ {
+				rc.Add(uint16(i))
+			}
+			return rc.toEfficientContainer()
+		}
+	}
+
 	isSortedAndValid := true
 	for i := 0; i < len(rc2.iv); i++ {
 		if rc2.iv[i].start > rc2.iv[i].last() {
@@ -2306,7 +2318,7 @@ func (rc *runContainer16) inplaceUnion(rc2 *runContainer16) container {
 	} else {
 		for _, p := range rc2.iv {
 			card2 += p.runlen()
-			if card2 > 16 {
+			if card2*8 >= len(rc.iv) {
 				break
 			}
 		}
