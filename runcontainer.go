@@ -2275,15 +2275,32 @@ func (rc *runContainer16) inplaceUnion(rc2 *runContainer16) container {
 		return rc.toEfficientContainer()
 	}
 
-	card2 := 0
-	for _, p := range rc2.iv {
-		card2 += p.runlen()
-		if card2 > 16 {
-			break
+	if len(rc2.iv) == 1 {
+		card2 := rc2.iv[0].runlen()
+		if card2 <= 4 || card2*8 < len(rc.iv) {
+			last := int(rc2.iv[0].last())
+			for i := int(rc2.iv[0].start); i <= last; i++ {
+				rc.Add(uint16(i))
+			}
+			return rc.toEfficientContainer()
 		}
 	}
 
-	if card2 <= 4 || card2*8 < len(rc.iv) {
+	isSortedAndValid := true
+	for i := 0; i < len(rc2.iv); i++ {
+		if rc2.iv[i].start > rc2.iv[i].last() {
+			isSortedAndValid = false
+			break
+		}
+		if i > 0 {
+			if int(rc2.iv[i-1].last())+1 >= int(rc2.iv[i].start) {
+				isSortedAndValid = false
+				break
+			}
+		}
+	}
+
+	if !isSortedAndValid {
 		for _, p := range rc2.iv {
 			last := int(p.last())
 			for i := int(p.start); i <= last; i++ {
