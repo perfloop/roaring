@@ -2275,36 +2275,18 @@ func (rc *runContainer16) inplaceUnion(rc2 *runContainer16) container {
 		return rc.toEfficientContainer()
 	}
 
-	// Fast path for low-cardinality updates (sparse inputs)
-	// If the second container has very few values, adding them one by one is O(cardinality * log N)
-	// and does not require allocating or copying the entire rc.iv slice.
-	if rc2.getCardinality() <= 16 {
-		for _, p := range rc2.iv {
-			last := int(p.last())
-			for i := int(p.start); i <= last; i++ {
-				rc.Add(uint16(i))
-			}
-		}
-		return rc.toEfficientContainer()
-	}
-
-	// General streaming union merge to avoid O(N * values) insertion cost.
-	// We merge rc.iv and rc2.iv into a single slice.
-	// To minimize allocations, we preallocate the destination slice with the maximum possible capacity.
 	alim := len(rc.iv)
 	blim := len(rc2.iv)
 	m := make([]interval16, 0, alim+blim)
 
-	var na int // next from a (rc)
-	var nb int // next from b (rc2)
+	var na int
+	var nb int
 
-	// merged holds the current merge output, which might
-	// get additional merges before being appended to m.
 	var merged interval16
-	var mergedUsed bool // is merged being used at the moment?
+	var mergedUsed bool
 
-	var cura interval16 // currently considering this interval16 from a
-	var curb interval16 // currently considering this interval16 from b
+	var cura interval16
+	var curb interval16
 
 	for na < alim && nb < blim {
 		cura = rc.iv[na]
@@ -2323,14 +2305,12 @@ func (rc *runContainer16) inplaceUnion(rc2 *runContainer16) container {
 				mergedUpdated = true
 			}
 			if !mergedUpdated {
-				// we know that merged is disjoint from cura and curb
 				m = append(m, merged)
 				mergedUsed = false
 			}
 			continue
 
 		} else {
-			// !mergedUsed
 			if !canMerge16(cura, curb) {
 				if cura.start < curb.start {
 					m = append(m, cura)
@@ -2354,7 +2334,6 @@ func (rc *runContainer16) inplaceUnion(rc2 *runContainer16) container {
 	if nb >= blim {
 		bDone = true
 	}
-	// finish by merging anything remaining into merged we can:
 	if mergedUsed {
 		if !aDone {
 		aAdds:
