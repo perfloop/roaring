@@ -243,8 +243,8 @@ func HeapXor(bitmaps ...*Bitmap) *Bitmap {
 		}
 	}
 
-	// Fall back to original binary-tree heap reduction when nonEmptyCount <= 4
-	// or nonEmptyCount > 64 to resolve latency and allocation regressions. Refreshed.
+	// Use pairwise heap reduction for very small or very large inputs
+	// where sorting overhead or active min-heap maintenance dominates.
 	if nonEmptyCount <= 4 || nonEmptyCount > 64 {
 		pq := make(priorityQueue, 0, nonEmptyCount)
 		for _, bm := range bitmaps {
