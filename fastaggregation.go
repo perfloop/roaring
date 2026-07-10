@@ -243,7 +243,7 @@ func HeapXor(bitmaps ...*Bitmap) *Bitmap {
 		}
 	}
 
-	if nonEmptyCount <= 4 {
+	if nonEmptyCount <= 4 || nonEmptyCount > 64 {
 		pq := make(priorityQueue, 0, nonEmptyCount)
 		for _, bm := range bitmaps {
 			if bm != nil && bm.highlowcontainer.size() > 0 {

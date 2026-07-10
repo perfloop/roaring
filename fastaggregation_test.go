@@ -324,12 +324,26 @@ func TestFastAggregations_HeapXorDifferentialDeserialized(t *testing.T) {
 	}
 	rb3.RunOptimize()
 
+	rb4 := NewBitmap()
+	rb4.Add(5)
+	rb4.Add(10)
+	rb4.Add(15)
+
+	rb5 := NewBitmap()
+	for i := uint32(200000); i < 205000; i++ {
+		rb5.Add(i)
+	}
+
 	// Serialize them to bytes
 	buf1, err := rb1.MarshalBinary()
 	assert.Nil(t, err)
 	buf2, err := rb2.MarshalBinary()
 	assert.Nil(t, err)
 	buf3, err := rb3.MarshalBinary()
+	assert.Nil(t, err)
+	buf4, err := rb4.MarshalBinary()
+	assert.Nil(t, err)
+	buf5, err := rb5.MarshalBinary()
 	assert.Nil(t, err)
 
 	// Deserialize into new bitmaps
@@ -345,11 +359,19 @@ func TestFastAggregations_HeapXorDifferentialDeserialized(t *testing.T) {
 	err = drb3.UnmarshalBinary(buf3)
 	assert.Nil(t, err)
 
-	// Perform HeapXor on deserialized bitmaps
-	res := HeapXor(drb1, drb2, drb3)
+	drb4 := NewBitmap()
+	err = drb4.UnmarshalBinary(buf4)
+	assert.Nil(t, err)
+
+	drb5 := NewBitmap()
+	err = drb5.UnmarshalBinary(buf5)
+	assert.Nil(t, err)
+
+	// Perform HeapXor on deserialized bitmaps (nonEmptyCount = 5, triggers multi-way sorted merge path)
+	res := HeapXor(drb1, drb2, drb3, drb4, drb5)
 
 	// Compute expected result via sequential Xor
-	expected := Xor(Xor(rb1, rb2), rb3)
+	expected := Xor(Xor(Xor(Xor(rb1, rb2), rb3), rb4), rb5)
 
 	assert.True(t, res.Equals(expected), "Differential result of HeapXor on deserialized bitmaps does not match expected sequential Xor")
 }
