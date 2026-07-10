@@ -290,26 +290,4 @@ func BenchmarkRunContainerInplaceUnion(b *testing.B) {
 			_ = rc.inplaceUnion(rc2)
 		}
 	})
-
-	for _, N := range []int{100, 500, 1000} {
-		b.Run(fmt.Sprintf("Sweep_N=%d_runlen=5", N), func(b *testing.B) {
-			iv1 := make([]interval16, N)
-			for i := 0; i < N; i++ {
-				iv1[i] = newInterval16Range(uint16(i*20), uint16(i*20+5))
-			}
-			iv2 := []interval16{
-				newInterval16Range(uint16(N*20+10), uint16(N*20+14)),
-			}
-
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				rc := &runContainer16{
-					iv: make([]interval16, len(iv1), len(iv1)+len(iv2)),
-				}
-				copy(rc.iv, iv1)
-				rc2 := &runContainer16{iv: iv2}
-				_ = rc.inplaceUnion(rc2)
-			}
-		})
-	}
 }

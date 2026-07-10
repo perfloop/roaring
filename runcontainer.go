@@ -2277,7 +2277,7 @@ func (rc *runContainer16) inplaceUnion(rc2 *runContainer16) container {
 
 	if len(rc2.iv) == 1 {
 		card2 := rc2.iv[0].runlen()
-		if card2 <= 4 || card2*8 < len(rc.iv) {
+		if card2 <= 4 {
 			last := int(rc2.iv[0].last())
 			for i := int(rc2.iv[0].start); i <= last; i++ {
 				rc.Add(uint16(i))
