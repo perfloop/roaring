@@ -2267,7 +2267,131 @@ func (rc *runContainer16) ior(a container) container {
 }
 
 func (rc *runContainer16) inplaceUnion(rc2 *runContainer16) container {
-	rc.iv = rc.union(rc2).iv
+	if len(rc2.iv) == 0 {
+		return rc.toEfficientContainer()
+	}
+	if len(rc.iv) == 0 {
+		rc.iv = append([]interval16(nil), rc2.iv...)
+		return rc.toEfficientContainer()
+	}
+
+	// Fast path for low-cardinality updates (sparse inputs)
+	// If the second container has very few values, adding them one by one is O(cardinality * log N)
+	// and does not require allocating or copying the entire rc.iv slice.
+	if rc2.getCardinality() <= 16 {
+		for _, p := range rc2.iv {
+			last := int(p.last())
+			for i := int(p.start); i <= last; i++ {
+				rc.Add(uint16(i))
+			}
+		}
+		return rc.toEfficientContainer()
+	}
+
+	// General streaming union merge to avoid O(N * values) insertion cost.
+	// We merge rc.iv and rc2.iv into a single slice.
+	// To minimize allocations, we preallocate the destination slice with the maximum possible capacity.
+	alim := len(rc.iv)
+	blim := len(rc2.iv)
+	m := make([]interval16, 0, alim+blim)
+
+	var na int // next from a (rc)
+	var nb int // next from b (rc2)
+
+	// merged holds the current merge output, which might
+	// get additional merges before being appended to m.
+	var merged interval16
+	var mergedUsed bool // is merged being used at the moment?
+
+	var cura interval16 // currently considering this interval16 from a
+	var curb interval16 // currently considering this interval16 from b
+
+	for na < alim && nb < blim {
+		cura = rc.iv[na]
+		curb = rc2.iv[nb]
+
+		if mergedUsed {
+			mergedUpdated := false
+			if canMerge16(cura, merged) {
+				merged = mergeInterval16s(cura, merged)
+				na = rc.indexOfIntervalAtOrAfter(int(merged.last())+1, na+1)
+				mergedUpdated = true
+			}
+			if canMerge16(curb, merged) {
+				merged = mergeInterval16s(curb, merged)
+				nb = rc2.indexOfIntervalAtOrAfter(int(merged.last())+1, nb+1)
+				mergedUpdated = true
+			}
+			if !mergedUpdated {
+				// we know that merged is disjoint from cura and curb
+				m = append(m, merged)
+				mergedUsed = false
+			}
+			continue
+
+		} else {
+			// !mergedUsed
+			if !canMerge16(cura, curb) {
+				if cura.start < curb.start {
+					m = append(m, cura)
+					na++
+				} else {
+					m = append(m, curb)
+					nb++
+				}
+			} else {
+				merged = mergeInterval16s(cura, curb)
+				mergedUsed = true
+				na = rc.indexOfIntervalAtOrAfter(int(merged.last())+1, na+1)
+				nb = rc2.indexOfIntervalAtOrAfter(int(merged.last())+1, nb+1)
+			}
+		}
+	}
+	var aDone, bDone bool
+	if na >= alim {
+		aDone = true
+	}
+	if nb >= blim {
+		bDone = true
+	}
+	// finish by merging anything remaining into merged we can:
+	if mergedUsed {
+		if !aDone {
+		aAdds:
+			for na < alim {
+				cura = rc.iv[na]
+				if canMerge16(cura, merged) {
+					merged = mergeInterval16s(cura, merged)
+					na = rc.indexOfIntervalAtOrAfter(int(merged.last())+1, na+1)
+				} else {
+					break aAdds
+				}
+			}
+		}
+
+		if !bDone {
+		bAdds:
+			for nb < blim {
+				curb = rc2.iv[nb]
+				if canMerge16(curb, merged) {
+					merged = mergeInterval16s(curb, merged)
+					nb = rc2.indexOfIntervalAtOrAfter(int(merged.last())+1, nb+1)
+				} else {
+					break bAdds
+				}
+			}
+		}
+
+		m = append(m, merged)
+	}
+	if na < alim {
+		m = append(m, rc.iv[na:]...)
+	}
+	if nb < blim {
+		m = append(m, rc2.iv[nb:]...)
+	}
+
+	rc.iv = m
 	return rc.toEfficientContainer()
 }
 
