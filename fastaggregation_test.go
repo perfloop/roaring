@@ -298,3 +298,10 @@ func TestHeapXorNoMutation(t *testing.T) {
 	assert.True(t, rb_sparse.Equals(rb_sparse_clone), "rb_sparse was mutated in dense-sparse order!")
 	assert.True(t, rb_dense.Equals(rb_dense_clone), "rb_dense was mutated in dense-sparse order!")
 }
+
+func TestHeapXorNilInput(t *testing.T) {
+	assert.NotPanics(t, func() {
+		res := HeapXor(nil)
+		assert.Nil(t, res)
+	})
+}

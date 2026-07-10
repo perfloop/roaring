@@ -220,6 +220,9 @@ func HeapXor(bitmaps ...*Bitmap) *Bitmap {
 	if len(bitmaps) == 0 {
 		return NewBitmap()
 	} else if len(bitmaps) == 1 {
+		if bitmaps[0] == nil {
+			return nil
+		}
 		return bitmaps[0].Clone()
 	}
 
