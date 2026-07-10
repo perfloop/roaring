@@ -84,7 +84,6 @@ func TestRunContainer16InplaceUnionDirect(t *testing.T) {
 				resRc, ok := res.(*runContainer16)
 				if ok {
 					assert.Equal(t, tc.wantIv, resRc.iv)
-					// Also verify that it passes our structural invariants check
 					for i := range resRc.iv {
 						assert.True(t, resRc.iv[i].start <= resRc.iv[i].last())
 						if i > 0 {
@@ -98,7 +97,6 @@ func TestRunContainer16InplaceUnionDirect(t *testing.T) {
 }
 
 func TestRunContainer16InplaceUnionAdversarial(t *testing.T) {
-	// rc2 has unsorted/overlapping intervals: [30, 30] followed by [10, 10]
 	rc1 := &runContainer16{
 		iv: []interval16{newInterval16Range(5, 5)},
 	}
@@ -110,7 +108,6 @@ func TestRunContainer16InplaceUnionAdversarial(t *testing.T) {
 	want := []uint16{5, 10, 30}
 	assert.Equal(t, want, containerToSlice(res))
 
-	// Verify that the resulting container's intervals are structurally sorted and non-overlapping
 	resRc, ok := res.(*runContainer16)
 	if ok {
 		assert.Equal(t, 3, len(resRc.iv))
@@ -179,36 +176,6 @@ func BenchmarkRunContainerInplaceUnion(b *testing.B) {
 	b.Run("SparseAdd", func(b *testing.B) {
 		iv2Sparse := []interval16{
 			newInterval16Range(50, 50),
-		}
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			rc := &runContainer16{
-				iv: make([]interval16, len(iv1Dense), len(iv1Dense)+len(iv2Sparse)),
-			}
-			copy(rc.iv, iv1Dense)
-			rc2 := &runContainer16{iv: iv2Sparse}
-			_ = rc.inplaceUnion(rc2)
-		}
-	})
-
-	b.Run("SparseAdd_Card15", func(b *testing.B) {
-		iv2Sparse := []interval16{
-			newInterval16Range(50, 64), // Cardinality 15
-		}
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			rc := &runContainer16{
-				iv: make([]interval16, len(iv1Dense), len(iv1Dense)+len(iv2Sparse)),
-			}
-			copy(rc.iv, iv1Dense)
-			rc2 := &runContainer16{iv: iv2Sparse}
-			_ = rc.inplaceUnion(rc2)
-		}
-	})
-
-	b.Run("SparseAdd_Card17", func(b *testing.B) {
-		iv2Sparse := []interval16{
-			newInterval16Range(50, 66), // Cardinality 17
 		}
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {

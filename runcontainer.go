@@ -2275,19 +2275,15 @@ func (rc *runContainer16) inplaceUnion(rc2 *runContainer16) container {
 		return rc.toEfficientContainer()
 	}
 
-	rc2Valid := true
-	for i := range rc2.iv {
-		if rc2.iv[i].start > rc2.iv[i].last() {
-			rc2Valid = false
-			break
-		}
-		if i > 0 && rc2.iv[i-1].last()+1 >= rc2.iv[i].start {
-			rc2Valid = false
+	card2 := 0
+	for _, p := range rc2.iv {
+		card2 += p.runlen()
+		if card2 > 16 {
 			break
 		}
 	}
 
-	if !rc2Valid || rc2.getCardinality() <= 16 {
+	if card2 <= 16 {
 		for _, p := range rc2.iv {
 			last := int(p.last())
 			for i := int(p.start); i <= last; i++ {
@@ -2311,7 +2307,7 @@ func (rc *runContainer16) inplaceUnion(rc2 *runContainer16) container {
 		rc.iv = origIv[blim : alim+blim]
 		m = origIv[:0]
 	} else {
-		m = make([]interval16, 0, alim)
+		m = make([]interval16, 0, maxPossibleCapacity)
 	}
 
 	var na int
