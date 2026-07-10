@@ -2267,6 +2267,26 @@ func (rc *runContainer16) ior(a container) container {
 }
 
 func (rc *runContainer16) inplaceUnion(rc2 *runContainer16) container {
+	if len(rc2.iv) == 1 && rc2.iv[0].runlen() <= 4 {
+		for i := int(rc2.iv[0].start); i <= int(rc2.iv[0].last()); i++ {
+			rc.Add(uint16(i))
+		}
+		return rc.toEfficientContainer()
+	}
+
+	isSortedAndValid := true
+	for i := 1; i < len(rc2.iv); i++ {
+		if int(rc2.iv[i-1].last())+1 >= int(rc2.iv[i].start) {
+			isSortedAndValid = false
+			break
+		}
+	}
+
+	if isSortedAndValid {
+		rc.iv = rc.union(rc2).iv
+		return rc.toEfficientContainer()
+	}
+
 	for _, p := range rc2.iv {
 		last := int(p.last())
 		for i := int(p.start); i <= last; i++ {
