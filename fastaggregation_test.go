@@ -266,7 +266,7 @@ func TestFastAggregationsAndAny(t *testing.T) {
 	assert.True(t, fast.Equals(orFirst))
 }
 
-func TestHeapXorNoMutation(t *testing.T) {
+func TestFastAggregations_HeapXorNoMutation(t *testing.T) {
 	// Create a sparse bitmap (arrayContainer)
 	rb_sparse := NewBitmap()
 	rb_sparse.Add(1)
@@ -299,14 +299,14 @@ func TestHeapXorNoMutation(t *testing.T) {
 	assert.True(t, rb_dense.Equals(rb_dense_clone), "rb_dense was mutated in dense-sparse order!")
 }
 
-func TestHeapXorNilInput(t *testing.T) {
+func TestFastAggregations_HeapXorNilInput(t *testing.T) {
 	assert.NotPanics(t, func() {
 		res := HeapXor(nil)
 		assert.Nil(t, res)
 	})
 }
 
-func TestHeapXorDifferentialDeserialized(t *testing.T) {
+func TestFastAggregations_HeapXorDifferentialDeserialized(t *testing.T) {
 	// Create several bitmaps with different container types (array, bitmap, run)
 	rb1 := NewBitmap()
 	rb1.Add(1)
