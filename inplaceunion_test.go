@@ -80,7 +80,6 @@ func TestRunContainer16InplaceUnionDirect(t *testing.T) {
 				res := rc1.inplaceUnion(rc2)
 				assert.Equal(t, tc.want, containerToSlice(res))
 
-				// Directly assert structural interval equivalence
 				resRc, ok := res.(*runContainer16)
 				if ok {
 					assert.Equal(t, tc.wantIv, resRc.iv)
@@ -114,6 +113,36 @@ func TestRunContainer16InplaceUnionAdversarial(t *testing.T) {
 		assert.Equal(t, uint16(5), resRc.iv[0].start)
 		assert.Equal(t, uint16(10), resRc.iv[1].start)
 		assert.Equal(t, uint16(30), resRc.iv[2].start)
+	}
+}
+
+func TestRunContainer16InplaceUnionAdversarialLarge(t *testing.T) {
+	rc1 := &runContainer16{
+		iv: []interval16{newInterval16Range(5, 5)},
+	}
+	rc2 := &runContainer16{
+		iv: []interval16{
+			newInterval16Range(50, 50),
+			newInterval16Range(10, 10),
+			newInterval16Range(100, 115),
+		},
+	}
+
+	res := rc1.inplaceUnion(rc2)
+	want := makeRange16(5, 5)
+	want = append(want, makeRange16(10, 10)...)
+	want = append(want, makeRange16(50, 50)...)
+	want = append(want, makeRange16(100, 115)...)
+
+	assert.Equal(t, want, containerToSlice(res))
+
+	resRc, ok := res.(*runContainer16)
+	if ok {
+		assert.Equal(t, 4, len(resRc.iv))
+		assert.Equal(t, uint16(5), resRc.iv[0].start)
+		assert.Equal(t, uint16(10), resRc.iv[1].start)
+		assert.Equal(t, uint16(50), resRc.iv[2].start)
+		assert.Equal(t, uint16(100), resRc.iv[3].start)
 	}
 }
 
@@ -176,6 +205,36 @@ func BenchmarkRunContainerInplaceUnion(b *testing.B) {
 	b.Run("SparseAdd", func(b *testing.B) {
 		iv2Sparse := []interval16{
 			newInterval16Range(50, 50),
+		}
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			rc := &runContainer16{
+				iv: make([]interval16, len(iv1Dense), len(iv1Dense)+len(iv2Sparse)),
+			}
+			copy(rc.iv, iv1Dense)
+			rc2 := &runContainer16{iv: iv2Sparse}
+			_ = rc.inplaceUnion(rc2)
+		}
+	})
+
+	b.Run("SparseAdd_Card15", func(b *testing.B) {
+		iv2Sparse := []interval16{
+			newInterval16Range(50, 64),
+		}
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			rc := &runContainer16{
+				iv: make([]interval16, len(iv1Dense), len(iv1Dense)+len(iv2Sparse)),
+			}
+			copy(rc.iv, iv1Dense)
+			rc2 := &runContainer16{iv: iv2Sparse}
+			_ = rc.inplaceUnion(rc2)
+		}
+	})
+
+	b.Run("SparseAdd_Card17", func(b *testing.B) {
+		iv2Sparse := []interval16{
+			newInterval16Range(50, 66),
 		}
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
