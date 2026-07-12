@@ -295,8 +295,7 @@ func bitmapEquals(a, b []uint64) bool {
 }
 
 func (bc *bitmapContainer) fillLeastSignificant16bits(x []uint32, i int, mask uint32) int {
-	// Note: The Go compiler compiles this loop using TZCNT/BLSR on amd64.
-	// The remaining optimization headroom is vectorized decode (cf. CRoaring bitset_extract_setbits_avx2/avx512).
+	// Compiler emits TZCNT/BLSR for this loop. Headroom is vectorized decode (cf. CRoaring bitset_extract_setbits_avx2/avx512).
 	pos := i
 	base := mask
 	for k := 0; k < len(bc.bitmap); k++ {
