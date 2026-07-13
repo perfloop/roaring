@@ -446,13 +446,16 @@ func advanceUntil(
 	mid := 0
 	for lower+1 != upper {
 		mid = (lower + upper) >> 1
-		if array[mid] < min {
-			lower = mid
-		} else if array[mid] == min {
+		value := array[mid]
+		if value == min {
 			return mid
-		} else {
-			upper = mid
 		}
+
+		// The uint32 subtraction has its high bit set exactly when value < min.
+		// Use that bit to update one bound without an ordering branch.
+		mask := -int((uint32(value) - uint32(min)) >> 31)
+		lower = (lower &^ mask) | (mid & mask)
+		upper = (upper & mask) | (mid &^ mask)
 	}
 	return upper
 }
