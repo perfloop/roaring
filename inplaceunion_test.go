@@ -1,10 +1,12 @@
 package roaring
 
 import (
+	"bytes"
 	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRunContainer16InplaceUnionDirect(t *testing.T) {
@@ -181,6 +183,35 @@ func TestRunContainer16InplaceUnionAdversarialWrapped(t *testing.T) {
 	}
 }
 
+func TestRunContainer16InplaceUnionDeserializedMalformedReceiver(t *testing.T) {
+	serialized := serializeRunContainerForInplaceUnionTest(t, []interval16{
+		newInterval16Range(10, 20),
+		newInterval16Range(50, 60),
+	})
+	copy(serialized[len(serialized)-8:], []byte{50, 0, 10, 0, 10, 0, 10, 0})
+
+	receiver := NewBitmap()
+	_, err := receiver.ReadFrom(bytes.NewReader(serialized))
+	require.NoError(t, err)
+
+	incoming := NewBitmap()
+	incoming.highlowcontainer.appendContainer(0, &runContainer16{iv: []interval16{
+		newInterval16Range(70, 72),
+		newInterval16Range(80, 82),
+	}}, false)
+
+	assert.NotPanics(t, func() { receiver.Or(incoming) })
+}
+
+func serializeRunContainerForInplaceUnionTest(t *testing.T, intervals []interval16) []byte {
+	t.Helper()
+	bitmap := NewBitmap()
+	bitmap.highlowcontainer.appendContainer(0, &runContainer16{iv: intervals}, false)
+	serialized, err := bitmap.ToBytes()
+	require.NoError(t, err)
+	return serialized
+}
+
 func TestRunContainer16InplaceUnionEmptyReceiverWithUnsorted(t *testing.T) {
 	rc1 := &runContainer16{
 		iv: []interval16{},
@@ -207,6 +238,26 @@ func TestRunContainer16InplaceUnionEmptyReceiverWithWrapped(t *testing.T) {
 
 	assert.Empty(t, containerToSlice(rc1.inplaceUnion(rc2)))
 	assert.Empty(t, rc1.iv)
+}
+
+func TestRunContainer16InplaceUnionSparseMultiRun(t *testing.T) {
+	rc := &runContainer16{iv: []interval16{
+		newInterval16Range(10, 20),
+		newInterval16Range(40, 50),
+		newInterval16Range(70, 80),
+	}}
+
+	result := rc.inplaceUnion(&runContainer16{iv: []interval16{
+		newInterval16Range(25, 30),
+		newInterval16Range(55, 60),
+	}})
+
+	want := makeRange16(10, 20)
+	want = append(want, makeRange16(25, 30)...)
+	want = append(want, makeRange16(40, 50)...)
+	want = append(want, makeRange16(55, 60)...)
+	want = append(want, makeRange16(70, 80)...)
+	assert.Equal(t, want, containerToSlice(result))
 }
 
 func TestRunContainer16InplaceUnionSingleIntervalRetainsReceiverCapacity(t *testing.T) {

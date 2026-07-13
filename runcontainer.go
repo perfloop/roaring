@@ -2280,7 +2280,16 @@ func (rc *runContainer16) inplaceUnion(rc2 *runContainer16) container {
 		return rc.toEfficientContainer()
 	}
 
-	if !validRunIntervals(rc2.iv) {
+	if len(rc2.iv) < len(rc.iv) {
+		for _, interval := range rc2.iv {
+			for value, last := int(interval.start), int(interval.last()); value <= last; value++ {
+				rc.Add(uint16(value))
+			}
+		}
+		return rc.toEfficientContainer()
+	}
+
+	if !validRunIntervals(rc2.iv) || !validRunIntervals(rc.iv) {
 		rc.inplaceUnionValues(rc2)
 		return rc.toEfficientContainer()
 	}
@@ -2355,6 +2364,41 @@ func (rc *runContainer16) inplaceUnionInterval(add interval16) {
 	}
 }
 
+func unionRunCount(left, right []interval16) int {
+	var merged interval16
+	mergedUsed := false
+	count := 0
+
+	leftIndex, rightIndex := 0, 0
+	for leftIndex < len(left) || rightIndex < len(right) {
+		var next interval16
+		if rightIndex == len(right) || leftIndex < len(left) && left[leftIndex].start < right[rightIndex].start {
+			next = left[leftIndex]
+			leftIndex++
+		} else {
+			next = right[rightIndex]
+			rightIndex++
+		}
+
+		if !mergedUsed {
+			merged = next
+			mergedUsed = true
+			continue
+		}
+		if int(next.start) <= int(merged.last())+1 {
+			merged = mergeInterval16s(merged, next)
+			continue
+		}
+		count++
+		merged = next
+	}
+
+	if mergedUsed {
+		count++
+	}
+	return count
+}
+
 func (rc *runContainer16) inplaceUnionRuns(rc2 *runContainer16) {
 	originalLength := len(rc.iv)
 	totalLength := originalLength + len(rc2.iv)
@@ -2363,11 +2407,11 @@ func (rc *runContainer16) inplaceUnionRuns(rc2 *runContainer16) {
 		rc.iv = rc.iv[:totalLength]
 		output = rc.iv
 	} else {
-		output = make([]interval16, totalLength)
+		output = make([]interval16, unionRunCount(rc.iv, rc2.iv))
 	}
 
 	left, right := originalLength-1, len(rc2.iv)-1
-	outputIndex := totalLength
+	outputIndex := len(output)
 	for left >= 0 || right >= 0 {
 		var merged interval16
 		if right < 0 || left >= 0 && rc.iv[left].last() >= rc2.iv[right].last() {
@@ -2399,7 +2443,7 @@ func (rc *runContainer16) inplaceUnionRuns(rc2 *runContainer16) {
 	if outputIndex > 0 {
 		copy(output, output[outputIndex:])
 	}
-	rc.iv = output[:totalLength-outputIndex]
+	rc.iv = output[:len(output)-outputIndex]
 }
 
 // Such code should not be used as it will not preserve the container invariants:
