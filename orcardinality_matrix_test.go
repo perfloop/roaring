@@ -1,9 +1,12 @@
 package roaring
 
-import "testing"
+import (
+	"bytes"
+	"encoding/binary"
+	"testing"
+)
 
 var orCardinalityMatrixSink uint64
-var orCardinalityStrategySink int
 
 type orCardinalityPair struct {
 	name      string
@@ -64,29 +67,64 @@ func TestOrCardinalityMatrix(t *testing.T) {
 	}
 }
 
-func TestOrCardinalityContainerStrategies(t *testing.T) {
-	for _, fixture := range orCardinalitySingleFixtures() {
-		fixture := fixture
-		t.Run(fixture.name, func(t *testing.T) {
-			left := fixture.left.highlowcontainer.getContainerAtIndex(0)
-			right := fixture.right.highlowcontainer.getContainerAtIndex(0)
-			want := left.or(right).getCardinality()
+func TestOrCardinalityMalformedRunDeserialization(t *testing.T) {
+	data := malformedOverlappingRunBitmapBytes()
+	decoders := []struct {
+		name   string
+		decode func(*Bitmap, []byte) error
+	}{
+		{
+			name: "UnmarshalBinary",
+			decode: func(bitmap *Bitmap, data []byte) error {
+				return bitmap.UnmarshalBinary(data)
+			},
+		},
+		{
+			name: "ReadFrom",
+			decode: func(bitmap *Bitmap, data []byte) error {
+				_, err := bitmap.ReadFrom(bytes.NewReader(data))
+				return err
+			},
+		},
+	}
 
-			direct := left.orCardinality(right)
-			inclusionExclusion := left.getCardinality() + right.getCardinality() - left.andCardinality(right)
-			reverseDirect := right.orCardinality(left)
+	for _, decoder := range decoders {
+		decoder := decoder
+		t.Run(decoder.name, func(t *testing.T) {
+			bitmap := NewBitmap()
+			if err := decoder.decode(bitmap, data); err != nil {
+				t.Fatalf("decode malformed run bitmap: %v", err)
+			}
+			if err := bitmap.Validate(); err == nil {
+				t.Fatal("overlapping run bitmap unexpectedly validated")
+			}
 
-			if direct != want {
-				t.Fatalf("direct cardinality = %d, want %d", direct, want)
+			want := Or(bitmap, bitmap).GetCardinality()
+			if want != 4 {
+				t.Fatalf("materialized union cardinality = %d, want 4", want)
 			}
-			if inclusionExclusion != want {
-				t.Fatalf("inclusion-exclusion cardinality = %d, want %d", inclusionExclusion, want)
-			}
-			if reverseDirect != want {
-				t.Fatalf("reverse direct cardinality = %d, want %d", reverseDirect, want)
+			if got := bitmap.OrCardinality(bitmap); got != want {
+				t.Fatalf("OrCardinality = %d, want materialized union cardinality %d", got, want)
 			}
 		})
 	}
+}
+
+func malformedOverlappingRunBitmapBytes() []byte {
+	// One run container with [1,3] and [2,4]. ReadFrom accepts the format
+	// without validation, so this exercises the public deserialization boundary.
+	data := make([]byte, 19)
+	binary.LittleEndian.PutUint16(data[0:], uint16(serialCookie))
+	binary.LittleEndian.PutUint16(data[2:], 0) // one container
+	data[4] = 1                                // run-container bitmap
+	binary.LittleEndian.PutUint16(data[5:], 0) // key
+	binary.LittleEndian.PutUint16(data[7:], 3) // cardinality minus one
+	binary.LittleEndian.PutUint16(data[9:], 2) // interval count
+	binary.LittleEndian.PutUint16(data[11:], 1)
+	binary.LittleEndian.PutUint16(data[13:], 2) // [1,3]
+	binary.LittleEndian.PutUint16(data[15:], 2)
+	binary.LittleEndian.PutUint16(data[17:], 2) // [2,4]
+	return data
 }
 
 func BenchmarkOrCardinalityMatrix(b *testing.B) {
@@ -109,39 +147,6 @@ func BenchmarkOrCardinalityMatrix(b *testing.B) {
 	}
 }
 
-func BenchmarkOrCardinalityStrategies(b *testing.B) {
-	for _, fixture := range orCardinalitySingleFixtures() {
-		fixture := fixture
-		left := fixture.left.highlowcontainer.getContainerAtIndex(0)
-		right := fixture.right.highlowcontainer.getContainerAtIndex(0)
-		want := left.or(right).getCardinality()
-
-		b.Run("direct-"+fixture.name, func(b *testing.B) {
-			b.ReportAllocs()
-			var got int
-			for b.Loop() {
-				got = left.orCardinality(right)
-			}
-			if got != want {
-				b.Fatalf("direct cardinality = %d, want %d", got, want)
-			}
-			orCardinalityStrategySink = got
-		})
-
-		b.Run("inclusion-exclusion-"+fixture.name, func(b *testing.B) {
-			b.ReportAllocs()
-			var got int
-			for b.Loop() {
-				got = left.getCardinality() + right.getCardinality() - left.andCardinality(right)
-			}
-			if got != want {
-				b.Fatalf("inclusion-exclusion cardinality = %d, want %d", got, want)
-			}
-			orCardinalityStrategySink = got
-		})
-	}
-}
-
 func orCardinalityFixtureGroups() []orCardinalityFixtureGroup {
 	groups := make([]orCardinalityFixtureGroup, 0, len(orCardinalityPairs()))
 	for _, pair := range orCardinalityPairs() {
@@ -158,16 +163,6 @@ func orCardinalityFixtureGroups() []orCardinalityFixtureGroup {
 		groups = append(groups, group)
 	}
 	return groups
-}
-
-func orCardinalitySingleFixtures() []orCardinalityFixture {
-	fixtures := make([]orCardinalityFixture, 0, len(orCardinalityPairs())*len(orCardinalityShapes()))
-	for _, pair := range orCardinalityPairs() {
-		for _, shape := range orCardinalityShapes() {
-			fixtures = append(fixtures, newOrCardinalityFixture(pair, shape))
-		}
-	}
-	return fixtures
 }
 
 func newOrCardinalityFixture(pair orCardinalityPair, shape orCardinalityShape) orCardinalityFixture {

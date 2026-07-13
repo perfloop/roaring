@@ -1,6 +1,8 @@
 package roaring64
 
 import (
+	"bytes"
+	"encoding/binary"
 	"testing"
 
 	"github.com/RoaringBitmap/roaring/v2"
@@ -52,6 +54,68 @@ func TestOrCardinalityMatrix64(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestOrCardinalityMalformedRunDeserialization64(t *testing.T) {
+	data := malformedOverlappingRunBitmap64Bytes()
+	decoders := []struct {
+		name   string
+		decode func(*Bitmap, []byte) error
+	}{
+		{
+			name: "UnmarshalBinary",
+			decode: func(bitmap *Bitmap, data []byte) error {
+				return bitmap.UnmarshalBinary(data)
+			},
+		},
+		{
+			name: "ReadFrom",
+			decode: func(bitmap *Bitmap, data []byte) error {
+				_, err := bitmap.ReadFrom(bytes.NewReader(data))
+				return err
+			},
+		},
+	}
+
+	for _, decoder := range decoders {
+		decoder := decoder
+		t.Run(decoder.name, func(t *testing.T) {
+			bitmap := NewBitmap()
+			if err := decoder.decode(bitmap, data); err != nil {
+				t.Fatalf("decode malformed run bitmap: %v", err)
+			}
+			if err := bitmap.Validate(); err == nil {
+				t.Fatal("overlapping run bitmap unexpectedly validated")
+			}
+
+			want := Or(bitmap, bitmap).GetCardinality()
+			if want != 4 {
+				t.Fatalf("materialized union cardinality = %d, want 4", want)
+			}
+			if got := bitmap.OrCardinality(bitmap); got != want {
+				t.Fatalf("OrCardinality = %d, want materialized union cardinality %d", got, want)
+			}
+		})
+	}
+}
+
+func malformedOverlappingRunBitmap64Bytes() []byte {
+	// One outer key wrapping the same malformed 32-bit run bitmap used above.
+	data := make([]byte, 31)
+	binary.LittleEndian.PutUint64(data[0:], 1)
+	binary.LittleEndian.PutUint32(data[8:], 0)
+	inner := data[12:]
+	binary.LittleEndian.PutUint16(inner[0:], uint16(serialCookie))
+	binary.LittleEndian.PutUint16(inner[2:], 0) // one container
+	inner[4] = 1                                // run-container bitmap
+	binary.LittleEndian.PutUint16(inner[5:], 0) // key
+	binary.LittleEndian.PutUint16(inner[7:], 3) // cardinality minus one
+	binary.LittleEndian.PutUint16(inner[9:], 2) // interval count
+	binary.LittleEndian.PutUint16(inner[11:], 1)
+	binary.LittleEndian.PutUint16(inner[13:], 2) // [1,3]
+	binary.LittleEndian.PutUint16(inner[15:], 2)
+	binary.LittleEndian.PutUint16(inner[17:], 2) // [2,4]
+	return data
 }
 
 func BenchmarkOrCardinality64Matrix(b *testing.B) {

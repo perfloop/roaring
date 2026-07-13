@@ -1444,7 +1444,7 @@ main:
 				} else {
 					c1 := rb.highlowcontainer.getContainerAtIndex(pos1)
 					c2 := x2.highlowcontainer.getContainerAtIndex(pos2)
-					answer += uint64(containerOrCardinality(c1, c2))
+					answer += uint64(c1.orCardinality(c2))
 					pos1++
 					pos2++
 					if (pos1 == length1) || (pos2 == length2) {
@@ -1465,20 +1465,6 @@ main:
 		answer += uint64(x2.highlowcontainer.getContainerAtIndex(pos2).getCardinality())
 	}
 	return answer
-}
-
-func containerOrCardinality(c1, c2 container) int {
-	switch c1.(type) {
-	case *arrayContainer:
-		if _, ok := c2.(*arrayContainer); ok {
-			return c1.getCardinality() + c2.getCardinality() - c1.andCardinality(c2)
-		}
-	case *runContainer16:
-		if _, ok := c2.(*runContainer16); ok {
-			return c1.getCardinality() + c2.getCardinality() - c1.andCardinality(c2)
-		}
-	}
-	return c1.orCardinality(c2)
 }
 
 // AndCardinality returns the cardinality of the intersection between two bitmaps, bitmaps are not modified
