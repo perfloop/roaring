@@ -444,10 +444,12 @@ func advanceUntil(
 	lower += (spansize >> 1)
 
 	mid := 0
-	for lower+1 < upper {
+	for lower+1 != upper {
 		mid = (lower + upper) >> 1
 		if array[mid] < min {
 			lower = mid
+		} else if array[mid] == min {
+			return mid
 		} else {
 			upper = mid
 		}

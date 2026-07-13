@@ -30,6 +30,41 @@ func linearIntersectionCardinality(left, right []uint16) int {
 	return cardinality
 }
 
+func legacyAdvanceUntil(array []uint16, pos int, min uint16) int {
+	lower := pos + 1
+	if lower >= len(array) || array[lower] >= min {
+		return lower
+	}
+
+	spansize := 1
+	for lower+spansize < len(array) && array[lower+spansize] < min {
+		spansize *= 2
+	}
+	upper := len(array) - 1
+	if lower+spansize < len(array) {
+		upper = lower + spansize
+	}
+	if array[upper] == min {
+		return upper
+	}
+	if array[upper] < min {
+		return len(array)
+	}
+
+	lower += spansize >> 1
+	for lower+1 != upper {
+		mid := (lower + upper) >> 1
+		if array[mid] == min {
+			return mid
+		} else if array[mid] < min {
+			lower = mid
+		} else {
+			upper = mid
+		}
+	}
+	return upper
+}
+
 func TestAdvanceUntilAgainstLinearSearch(t *testing.T) {
 	testArrays := [][]uint16{
 		nil,
@@ -51,6 +86,40 @@ func TestAdvanceUntilAgainstLinearSearch(t *testing.T) {
 			}
 		}
 	}
+
+	t.Run("validated duplicate arrays retain legacy result", func(t *testing.T) {
+		large := make([]uint16, 65)
+		for i := 8; i < len(large); i++ {
+			large[i] = uint16(i)
+		}
+		large[6] = 5
+		large[7] = 5
+		if err := (&arrayContainer{content: large}).validate(); err != nil {
+			t.Fatalf("duplicate array should validate: %v", err)
+		}
+
+		for pos := -1; pos < len(large); pos++ {
+			for _, min := range []uint16{0, 1, 5, 6, 7, 8, 64, 65, 65535} {
+				got := advanceUntil(large, pos, len(large), min)
+				want := legacyAdvanceUntil(large, pos, min)
+				if got != want {
+					t.Fatalf("advanceUntil duplicate array at pos %d/min %d = %d, want legacy index %d", pos, min, got, want)
+				}
+			}
+		}
+
+		small := []uint16{5}
+		buffer := make([]uint16, len(small))
+		if n := intersection2by2(small, large, buffer); n != 1 || buffer[0] != 5 {
+			t.Fatalf("galloping materialized intersection = %v, want [5]", buffer[:n])
+		}
+		if n := intersection2by2Cardinality(small, large); n != 1 {
+			t.Fatalf("galloping intersection cardinality = %d, want 1", n)
+		}
+		if !intersects2by2(small, large) {
+			t.Fatal("galloping intersection should find the duplicate value")
+		}
+	})
 }
 
 type realDataArrayContainer struct {
