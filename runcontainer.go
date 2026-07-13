@@ -937,6 +937,26 @@ func (rc *runContainer16) search(key int) (whichInterval16 int, alreadyPresent b
 	return rc.searchRange(key, 0, 0)
 }
 
+// isCardinalitySafe reports whether direct cardinality routines can rely on
+// the canonical sorted, disjoint, non-adjacent run representation.
+func (rc *runContainer16) isCardinalitySafe() bool {
+	if len(rc.iv) == 0 {
+		return false
+	}
+
+	previous := rc.iv[0]
+	if previous.last() < previous.start {
+		return false
+	}
+	for _, current := range rc.iv[1:] {
+		if current.last() < current.start || previous.last() == MaxUint16 || previous.last()+1 >= current.start {
+			return false
+		}
+		previous = current
+	}
+	return true
+}
+
 // getCardinality returns the count of the integers stored in the
 // runContainer16. The running complexity depends on the size
 // of the container.

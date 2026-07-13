@@ -67,8 +67,20 @@ func TestOrCardinalityMatrix(t *testing.T) {
 	}
 }
 
+type malformedRunInterval struct {
+	start  uint16
+	length uint16
+}
+
 func TestOrCardinalityMalformedRunDeserialization(t *testing.T) {
-	data := malformedOverlappingRunBitmapBytes()
+	malformedRuns := []struct {
+		name      string
+		intervals []malformedRunInterval
+	}{
+		{name: "overlapping", intervals: []malformedRunInterval{{start: 1, length: 2}, {start: 2, length: 2}}},
+		{name: "unsorted", intervals: []malformedRunInterval{{start: 4}, {start: 1}}},
+		{name: "adjacent", intervals: []malformedRunInterval{{start: 1, length: 1}, {start: 3, length: 1}}},
+	}
 	decoders := []struct {
 		name   string
 		decode func(*Bitmap, []byte) error
@@ -88,42 +100,89 @@ func TestOrCardinalityMalformedRunDeserialization(t *testing.T) {
 		},
 	}
 
-	for _, decoder := range decoders {
-		decoder := decoder
-		t.Run(decoder.name, func(t *testing.T) {
-			bitmap := NewBitmap()
-			if err := decoder.decode(bitmap, data); err != nil {
-				t.Fatalf("decode malformed run bitmap: %v", err)
-			}
-			if err := bitmap.Validate(); err == nil {
-				t.Fatal("overlapping run bitmap unexpectedly validated")
-			}
+	for _, malformed := range malformedRuns {
+		malformed := malformed
+		for _, decoder := range decoders {
+			decoder := decoder
+			t.Run(malformed.name+"/"+decoder.name, func(t *testing.T) {
+				bitmap := NewBitmap()
+				if err := decoder.decode(bitmap, malformedRunBitmapBytes(malformed.intervals)); err != nil {
+					t.Fatalf("decode malformed run bitmap: %v", err)
+				}
+				if err := bitmap.Validate(); err == nil {
+					t.Fatal("malformed run bitmap unexpectedly validated")
+				}
+				selfWant := Or(bitmap, bitmap).GetCardinality()
+				if got := bitmap.OrCardinality(bitmap); got != selfWant {
+					t.Fatalf("run/run OrCardinality = %d, want materialized union cardinality %d", got, selfWant)
+				}
 
-			want := Or(bitmap, bitmap).GetCardinality()
-			if want != 4 {
-				t.Fatalf("materialized union cardinality = %d, want 4", want)
-			}
-			if got := bitmap.OrCardinality(bitmap); got != want {
-				t.Fatalf("OrCardinality = %d, want materialized union cardinality %d", got, want)
-			}
-		})
+				for _, peer := range malformedRunPeers() {
+					if err := peer.bitmap.Validate(); err != nil {
+						t.Fatalf("invalid %s peer: %v", peer.name, err)
+					}
+					if peer.name == "bitmap" {
+						if _, ok := peer.bitmap.highlowcontainer.getContainerAtIndex(0).(*bitmapContainer); !ok {
+							t.Fatal("bitmap peer did not produce a bitmap container")
+						}
+					}
+					forwardWant := Or(bitmap, peer.bitmap).GetCardinality()
+					if got := bitmap.OrCardinality(peer.bitmap); got != forwardWant {
+						t.Fatalf("run/%s OrCardinality = %d, want materialized union cardinality %d", peer.name, got, forwardWant)
+					}
+					reverseWant := Or(peer.bitmap, bitmap).GetCardinality()
+					if got := peer.bitmap.OrCardinality(bitmap); got != reverseWant {
+						t.Fatalf("%s/run OrCardinality = %d, want materialized union cardinality %d", peer.name, got, reverseWant)
+					}
+				}
+			})
+		}
 	}
 }
 
-func malformedOverlappingRunBitmapBytes() []byte {
-	// One run container with [1,3] and [2,4]. ReadFrom accepts the format
-	// without validation, so this exercises the public deserialization boundary.
-	data := make([]byte, 19)
+type malformedRunPeer struct {
+	name   string
+	bitmap *Bitmap
+}
+
+func malformedRunPeers() []malformedRunPeer {
+	arrayOverlap := NewBitmap()
+	arrayOverlap.Add(2)
+
+	arrayDisjoint := NewBitmap()
+	arrayDisjoint.Add(100)
+
+	bitmap := NewBitmap()
+	bitmap.Add(2)
+	bitmap.AddRange(1000, 1000+uint64(arrayDefaultMaxSize))
+
+	return []malformedRunPeer{
+		{name: "array-overlap", bitmap: arrayOverlap},
+		{name: "array-disjoint", bitmap: arrayDisjoint},
+		{name: "bitmap", bitmap: bitmap},
+	}
+}
+
+func malformedRunBitmapBytes(intervals []malformedRunInterval) []byte {
+	// ReadFrom accepts run intervals without validation, so this exercises the
+	// public deserialization boundary with non-canonical but syntactically valid runs.
+	data := make([]byte, 11+4*len(intervals))
 	binary.LittleEndian.PutUint16(data[0:], uint16(serialCookie))
 	binary.LittleEndian.PutUint16(data[2:], 0) // one container
 	data[4] = 1                                // run-container bitmap
 	binary.LittleEndian.PutUint16(data[5:], 0) // key
-	binary.LittleEndian.PutUint16(data[7:], 3) // cardinality minus one
-	binary.LittleEndian.PutUint16(data[9:], 2) // interval count
-	binary.LittleEndian.PutUint16(data[11:], 1)
-	binary.LittleEndian.PutUint16(data[13:], 2) // [1,3]
-	binary.LittleEndian.PutUint16(data[15:], 2)
-	binary.LittleEndian.PutUint16(data[17:], 2) // [2,4]
+
+	cardinality := 0
+	for _, interval := range intervals {
+		cardinality += int(interval.length) + 1
+	}
+	binary.LittleEndian.PutUint16(data[7:], uint16(cardinality-1))
+	binary.LittleEndian.PutUint16(data[9:], uint16(len(intervals)))
+	for index, interval := range intervals {
+		offset := 11 + 4*index
+		binary.LittleEndian.PutUint16(data[offset:], interval.start)
+		binary.LittleEndian.PutUint16(data[offset+2:], interval.length)
+	}
 	return data
 }
 
