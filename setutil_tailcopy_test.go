@@ -65,8 +65,25 @@ func TestExclusiveUnion2by2TailCopy(t *testing.T) {
 			if !slices.Equal(result.content, tc.want) {
 				t.Fatalf("xor result = %v, want %v", result.content, tc.want)
 			}
+
+			t.Run("undersized-buffer", func(t *testing.T) {
+				buffer := make([]uint16, len(tc.want)-1)
+				requirePanic(t, func() {
+					exclusiveUnion2by2(tc.left.content, tc.right.content, buffer)
+				})
+			})
 		})
 	}
+}
+
+func requirePanic(t *testing.T, f func()) {
+	t.Helper()
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic for undersized output buffer")
+		}
+	}()
+	f()
 }
 
 var arrayContainerXorTailCopySink uint64
