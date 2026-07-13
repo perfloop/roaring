@@ -20,19 +20,6 @@ func newXorTailCopyCrossoverCases(tailLength int) []xorTailCopyCrossoverCase {
 		return result
 	}
 
-	if tailLength == 0 {
-		return []xorTailCopyCrossoverCase{
-			{
-				left:  &arrayContainer{content: values(0, arrayDefaultMaxSize/2)},
-				right: &arrayContainer{content: values(0, arrayDefaultMaxSize/2)},
-			},
-			{
-				left:  &arrayContainer{content: values(arrayDefaultMaxSize/2, arrayDefaultMaxSize/2)},
-				right: &arrayContainer{content: values(arrayDefaultMaxSize/2, arrayDefaultMaxSize/2)},
-			},
-		}
-	}
-
 	commonLength := (arrayDefaultMaxSize - tailLength) / 2
 	return []xorTailCopyCrossoverCase{
 		{
@@ -71,40 +58,8 @@ func benchmarkArrayContainerXorTailCopyCrossover(b *testing.B, tailLength int) {
 	}
 }
 
-func BenchmarkArrayContainerXorTailCopyCrossover0(b *testing.B) {
-	benchmarkArrayContainerXorTailCopyCrossover(b, 0)
-}
-
-func BenchmarkArrayContainerXorTailCopyCrossover1(b *testing.B) {
-	benchmarkArrayContainerXorTailCopyCrossover(b, 1)
-}
-
-func BenchmarkArrayContainerXorTailCopyCrossover4(b *testing.B) {
-	benchmarkArrayContainerXorTailCopyCrossover(b, 4)
-}
-
-func BenchmarkArrayContainerXorTailCopyCrossover8(b *testing.B) {
-	benchmarkArrayContainerXorTailCopyCrossover(b, 8)
-}
-
-func BenchmarkArrayContainerXorTailCopyCrossover16(b *testing.B) {
-	benchmarkArrayContainerXorTailCopyCrossover(b, 16)
-}
-
-func BenchmarkArrayContainerXorTailCopyCrossover32(b *testing.B) {
-	benchmarkArrayContainerXorTailCopyCrossover(b, 32)
-}
-
 func BenchmarkArrayContainerXorTailCopyCrossover64(b *testing.B) {
 	benchmarkArrayContainerXorTailCopyCrossover(b, 64)
-}
-
-func BenchmarkArrayContainerXorTailCopyCrossover128(b *testing.B) {
-	benchmarkArrayContainerXorTailCopyCrossover(b, 128)
-}
-
-func BenchmarkArrayContainerXorTailCopyCrossover256(b *testing.B) {
-	benchmarkArrayContainerXorTailCopyCrossover(b, 256)
 }
 
 func BenchmarkArrayContainerXorTailCopyCrossover512(b *testing.B) {

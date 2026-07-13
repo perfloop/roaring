@@ -77,8 +77,7 @@ func exclusiveUnion2by2(set1 []uint16, set2 []uint16, buffer []uint16) int {
 			pos++
 			k1++
 			if k1 >= len(set1) {
-				tail := set2[k2:]
-				pos += copy(buffer[pos:pos+len(tail)], tail)
+				pos = copyTail(buffer, pos, set2[k2:])
 				break
 			}
 			s1 = set1[k1]
@@ -86,13 +85,11 @@ func exclusiveUnion2by2(set1 []uint16, set2 []uint16, buffer []uint16) int {
 			k1++
 			k2++
 			if k1 >= len(set1) {
-				tail := set2[k2:]
-				pos += copy(buffer[pos:pos+len(tail)], tail)
+				pos = copyTail(buffer, pos, set2[k2:])
 				break
 			}
 			if k2 >= len(set2) {
-				tail := set1[k1:]
-				pos += copy(buffer[pos:pos+len(tail)], tail)
+				pos = copyTail(buffer, pos, set1[k1:])
 				break
 			}
 			s1 = set1[k1]
@@ -102,14 +99,27 @@ func exclusiveUnion2by2(set1 []uint16, set2 []uint16, buffer []uint16) int {
 			pos++
 			k2++
 			if k2 >= len(set2) {
-				tail := set1[k1:]
-				pos += copy(buffer[pos:pos+len(tail)], tail)
+				pos = copyTail(buffer, pos, set1[k1:])
 				break
 			}
 			s2 = set2[k2]
 		}
 	}
 	return pos
+}
+
+// copyTailThreshold keeps tails of at most 1024 values on the scalar path.
+const copyTailThreshold = 1024
+
+func copyTail(buffer []uint16, pos int, tail []uint16) int {
+	if len(tail) <= copyTailThreshold {
+		for _, value := range tail {
+			buffer[pos] = value
+			pos++
+		}
+		return pos
+	}
+	return pos + copy(buffer[pos:pos+len(tail)], tail)
 }
 
 // union2by2Cardinality computes the cardinality of the union

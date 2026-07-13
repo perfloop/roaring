@@ -50,28 +50,41 @@ func newXorTailCopyCases(totalCardinality int) []xorTailCopyCase {
 }
 
 func TestExclusiveUnion2by2TailCopy(t *testing.T) {
-	for _, tc := range newXorTailCopyCases(arrayDefaultMaxSize) {
-		t.Run(tc.name, func(t *testing.T) {
-			buffer := make([]uint16, len(tc.left.content)+len(tc.right.content))
-			length := exclusiveUnion2by2(tc.left.content, tc.right.content, buffer)
-			if got := buffer[:length]; !slices.Equal(got, tc.want) {
-				t.Fatalf("exclusive union = %v, want %v", got, tc.want)
-			}
+	tests := []struct {
+		name             string
+		totalCardinality int
+	}{
+		// This creates tail lengths on both sides of the 1024-value cutoff.
+		{name: "crossover", totalCardinality: 1026},
+		{name: "maximum", totalCardinality: arrayDefaultMaxSize},
+	}
 
-			result, ok := tc.left.xorArray(tc.right).(*arrayContainer)
-			if !ok {
-				t.Fatalf("xor result type = %T, want *arrayContainer", result)
-			}
-			if !slices.Equal(result.content, tc.want) {
-				t.Fatalf("xor result = %v, want %v", result.content, tc.want)
-			}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for _, tc := range newXorTailCopyCases(test.totalCardinality) {
+				t.Run(tc.name, func(t *testing.T) {
+					buffer := make([]uint16, len(tc.left.content)+len(tc.right.content))
+					length := exclusiveUnion2by2(tc.left.content, tc.right.content, buffer)
+					if got := buffer[:length]; !slices.Equal(got, tc.want) {
+						t.Fatalf("exclusive union = %v, want %v", got, tc.want)
+					}
 
-			t.Run("undersized-buffer", func(t *testing.T) {
-				buffer := make([]uint16, len(tc.want)-1)
-				requirePanic(t, func() {
-					exclusiveUnion2by2(tc.left.content, tc.right.content, buffer)
+					result, ok := tc.left.xorArray(tc.right).(*arrayContainer)
+					if !ok {
+						t.Fatalf("xor result type = %T, want *arrayContainer", result)
+					}
+					if !slices.Equal(result.content, tc.want) {
+						t.Fatalf("xor result = %v, want %v", result.content, tc.want)
+					}
+
+					t.Run("undersized-buffer", func(t *testing.T) {
+						buffer := make([]uint16, len(tc.want)-1)
+						requirePanic(t, func() {
+							exclusiveUnion2by2(tc.left.content, tc.right.content, buffer)
+						})
+					})
 				})
-			})
+			}
 		})
 	}
 }
