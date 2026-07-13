@@ -77,14 +77,9 @@ func exclusiveUnion2by2(set1 []uint16, set2 []uint16, buffer []uint16) int {
 			pos++
 			k1++
 			if k1 >= len(set1) {
-				if len(set2)-k2 > copyTailThreshold {
-					tail := set2[k2:]
-					pos += copy(buffer[pos:pos+len(tail)], tail)
-				} else {
-					for ; k2 < len(set2); k2++ {
-						buffer[pos] = set2[k2]
-						pos++
-					}
+				for ; k2 < len(set2); k2++ {
+					buffer[pos] = set2[k2]
+					pos++
 				}
 				break
 			}
@@ -93,26 +88,16 @@ func exclusiveUnion2by2(set1 []uint16, set2 []uint16, buffer []uint16) int {
 			k1++
 			k2++
 			if k1 >= len(set1) {
-				if len(set2)-k2 > copyTailThreshold {
-					tail := set2[k2:]
-					pos += copy(buffer[pos:pos+len(tail)], tail)
-				} else {
-					for ; k2 < len(set2); k2++ {
-						buffer[pos] = set2[k2]
-						pos++
-					}
+				for ; k2 < len(set2); k2++ {
+					buffer[pos] = set2[k2]
+					pos++
 				}
 				break
 			}
 			if k2 >= len(set2) {
-				if len(set1)-k1 > copyTailThreshold {
-					tail := set1[k1:]
-					pos += copy(buffer[pos:pos+len(tail)], tail)
-				} else {
-					for ; k1 < len(set1); k1++ {
-						buffer[pos] = set1[k1]
-						pos++
-					}
+				for ; k1 < len(set1); k1++ {
+					buffer[pos] = set1[k1]
+					pos++
 				}
 				break
 			}
@@ -123,14 +108,9 @@ func exclusiveUnion2by2(set1 []uint16, set2 []uint16, buffer []uint16) int {
 			pos++
 			k2++
 			if k2 >= len(set2) {
-				if len(set1)-k1 > copyTailThreshold {
-					tail := set1[k1:]
-					pos += copy(buffer[pos:pos+len(tail)], tail)
-				} else {
-					for ; k1 < len(set1); k1++ {
-						buffer[pos] = set1[k1]
-						pos++
-					}
+				for ; k1 < len(set1); k1++ {
+					buffer[pos] = set1[k1]
+					pos++
 				}
 				break
 			}
@@ -140,8 +120,38 @@ func exclusiveUnion2by2(set1 []uint16, set2 []uint16, buffer []uint16) int {
 	return pos
 }
 
-// copyTailThreshold is the largest tail retained in the scalar loop.
-const copyTailThreshold = 1024
+func exclusiveUnionWithSingleton(singleton uint16, set []uint16, buffer []uint16) int {
+	buffer = buffer[:cap(buffer)]
+	if len(set) == 0 {
+		buffer[0] = singleton
+		return 1
+	}
+	if singleton < set[0] {
+		buffer[0] = singleton
+		copy(buffer[1:len(set)+1], set)
+		return len(set) + 1
+	}
+	if singleton == set[0] {
+		tail := set[1:]
+		copy(buffer[:len(tail)], tail)
+		return len(tail)
+	}
+
+	index := binarySearch(set, singleton)
+	if index >= 0 {
+		copy(buffer[:index], set[:index])
+		tail := set[index+1:]
+		copy(buffer[index:index+len(tail)], tail)
+		return len(set) - 1
+	}
+
+	insertion := -index - 1
+	copy(buffer[:insertion], set[:insertion])
+	buffer[insertion] = singleton
+	tail := set[insertion:]
+	copy(buffer[insertion+1:insertion+1+len(tail)], tail)
+	return len(set) + 1
+}
 
 // union2by2Cardinality computes the cardinality of the union
 func union2by2Cardinality(set1 []uint16, set2 []uint16) int {

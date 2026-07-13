@@ -675,7 +675,15 @@ func (ac *arrayContainer) xorArray(value2 *arrayContainer) container {
 	}
 	desiredCapacity := totalCardinality
 	answer := newArrayContainerCapacity(desiredCapacity)
-	length := exclusiveUnion2by2(value1.content, value2.content, answer.content)
+	var length int
+	switch {
+	case len(value1.content) == 1:
+		length = exclusiveUnionWithSingleton(value1.content[0], value2.content, answer.content)
+	case len(value2.content) == 1:
+		length = exclusiveUnionWithSingleton(value2.content[0], value1.content, answer.content)
+	default:
+		length = exclusiveUnion2by2(value1.content, value2.content, answer.content)
+	}
 	answer.content = answer.content[:length]
 	return answer
 }

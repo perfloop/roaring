@@ -87,6 +87,34 @@ func TestExclusiveUnion2by2TailCopy(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("singleton-middle", func(t *testing.T) {
+		tests := []struct {
+			name      string
+			singleton uint16
+			set       []uint16
+			want      []uint16
+		}{
+			{name: "present", singleton: 3, set: []uint16{1, 3, 5}, want: []uint16{1, 5}},
+			{name: "absent", singleton: 4, set: []uint16{1, 3, 5}, want: []uint16{1, 3, 4, 5}},
+			{name: "after", singleton: 7, set: []uint16{1, 3, 5}, want: []uint16{1, 3, 5, 7}},
+		}
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				singleton := &arrayContainer{content: []uint16{test.singleton}}
+				set := &arrayContainer{content: test.set}
+				for _, operands := range [][2]*arrayContainer{{singleton, set}, {set, singleton}} {
+					result, ok := operands[0].xorArray(operands[1]).(*arrayContainer)
+					if !ok {
+						t.Fatalf("xor result type = %T, want *arrayContainer", result)
+					}
+					if !slices.Equal(result.content, test.want) {
+						t.Fatalf("xor result = %v, want %v", result.content, test.want)
+					}
+				}
+			})
+		}
+	})
 }
 
 func requirePanic(t *testing.T, f func()) {
