@@ -2267,184 +2267,139 @@ func (rc *runContainer16) ior(a container) container {
 }
 
 func (rc *runContainer16) inplaceUnion(rc2 *runContainer16) container {
-	if len(rc2.iv) == 0 {
+	if len(rc2.iv) == 0 || rc == rc2 {
 		return rc.toEfficientContainer()
 	}
 
-	// Fast-path for small single-interval additions
-	if len(rc2.iv) == 1 && rc2.iv[0].runlen() <= 4 {
-		last := int(rc2.iv[0].last())
+	if len(rc2.iv) == 1 {
 		if rc2.iv[0].start <= rc2.iv[0].last() {
-			for i := int(rc2.iv[0].start); i <= last; i++ {
-				rc.Add(uint16(i))
-			}
-			return rc.toEfficientContainer()
+			rc.inplaceUnionInterval(rc2.iv[0])
+		} else {
+			rc.inplaceUnionValues(rc2)
 		}
+		return rc.toEfficientContainer()
 	}
 
-	isSortedAndValid := true
-	for i := 0; i < len(rc2.iv); i++ {
-		if rc2.iv[i].start > rc2.iv[i].last() {
-			isSortedAndValid = false
-			break
-		}
-		if i > 0 {
-			if int(rc2.iv[i-1].last())+1 >= int(rc2.iv[i].start) {
-				isSortedAndValid = false
-				break
-			}
-		}
-	}
-
-	if !isSortedAndValid {
-		for _, p := range rc2.iv {
-			last := int(p.last())
-			for i := int(p.start); i <= last; i++ {
-				rc.Add(uint16(i))
-			}
-		}
+	if !validRunIntervals(rc2.iv) {
+		rc.inplaceUnionValues(rc2)
 		return rc.toEfficientContainer()
 	}
 
 	if len(rc.iv) == 0 {
-		rc.iv = append([]interval16(nil), rc2.iv...)
+		rc.iv = append(rc.iv[:0], rc2.iv...)
 		return rc.toEfficientContainer()
 	}
 
-	var card2 int
-	if len(rc2.iv) == 1 {
-		card2 = rc2.iv[0].runlen()
-	} else {
-		for _, p := range rc2.iv {
-			card2 += p.runlen()
-			if card2 > 4 && card2*8 >= len(rc.iv) {
-				break
-			}
-		}
-	}
-
-	if card2 <= 4 || card2*8 < len(rc.iv) {
-		for _, p := range rc2.iv {
-			last := int(p.last())
-			for i := int(p.start); i <= last; i++ {
-				rc.Add(uint16(i))
-			}
-		}
-		return rc.toEfficientContainer()
-	}
-
-	var m []interval16
-	var stackBuf [256]interval16
-	if len(rc.iv)+len(rc2.iv) <= len(stackBuf) {
-		m = stackBuf[:0]
-	} else {
-		m = make([]interval16, 0, len(rc.iv)+len(rc2.iv))
-	}
-
-	alim := len(rc.iv)
-	blim := len(rc2.iv)
-
-	var na int
-	var nb int
-
-	var merged interval16
-	var mergedUsed bool
-
-	var cura interval16
-	var curb interval16
-
-	for na < alim && nb < blim {
-		cura = rc.iv[na]
-		curb = rc2.iv[nb]
-
-		if mergedUsed {
-			mergedUpdated := false
-			if canMerge16(cura, merged) {
-				merged = mergeInterval16s(cura, merged)
-				na = rc.indexOfIntervalAtOrAfter(int(merged.last())+1, na+1)
-				mergedUpdated = true
-			}
-			if canMerge16(curb, merged) {
-				merged = mergeInterval16s(curb, merged)
-				nb = rc2.indexOfIntervalAtOrAfter(int(merged.last())+1, nb+1)
-				mergedUpdated = true
-			}
-			if !mergedUpdated {
-				m = append(m, merged)
-				mergedUsed = false
-			}
-			continue
-		} else {
-			if !canMerge16(cura, curb) {
-				if cura.start < curb.start {
-					m = append(m, cura)
-					na++
-				} else {
-					m = append(m, curb)
-					nb++
-				}
-			} else {
-				merged = mergeInterval16s(cura, curb)
-				mergedUsed = true
-				na = rc.indexOfIntervalAtOrAfter(int(merged.last())+1, na+1)
-				nb = rc2.indexOfIntervalAtOrAfter(int(merged.last())+1, nb+1)
-			}
-		}
-	}
-
-	var aDone, bDone bool
-	if na >= alim {
-		aDone = true
-	}
-	if nb >= blim {
-		bDone = true
-	}
-
-	if mergedUsed {
-		if !aDone {
-		aAdds:
-			for na < alim {
-				cura = rc.iv[na]
-				if canMerge16(cura, merged) {
-					merged = mergeInterval16s(cura, merged)
-					na = rc.indexOfIntervalAtOrAfter(int(merged.last())+1, na+1)
-				} else {
-					break aAdds
-				}
-			}
-		}
-
-		if !bDone {
-		bAdds:
-			for nb < blim {
-				curb = rc2.iv[nb]
-				if canMerge16(curb, merged) {
-					merged = mergeInterval16s(curb, merged)
-					nb = rc2.indexOfIntervalAtOrAfter(int(merged.last())+1, nb+1)
-				} else {
-					break bAdds
-				}
-			}
-		}
-
-		m = append(m, merged)
-	}
-
-	if na < alim {
-		m = append(m, rc.iv[na:]...)
-	}
-	if nb < blim {
-		m = append(m, rc2.iv[nb:]...)
-	}
-
-	if cap(rc.iv) >= len(m) {
-		rc.iv = rc.iv[:len(m)]
-		copy(rc.iv, m)
-	} else {
-		rc.iv = append([]interval16(nil), m...)
-	}
-
+	rc.inplaceUnionRuns(rc2)
 	return rc.toEfficientContainer()
+}
+
+func validRunIntervals(iv []interval16) bool {
+	for i, current := range iv {
+		if current.start > current.last() {
+			return false
+		}
+		if i > 0 && int(iv[i-1].last())+1 >= int(current.start) {
+			return false
+		}
+	}
+	return true
+}
+
+func (rc *runContainer16) inplaceUnionValues(rc2 *runContainer16) {
+	for _, interval := range rc2.iv {
+		for value, last := int(interval.start), int(interval.last()); value <= last; value++ {
+			rc.Add(uint16(value))
+		}
+	}
+}
+
+func (rc *runContainer16) inplaceUnionInterval(add interval16) {
+	start, end := int(add.start), int(add.last())
+	position, present, _ := rc.search(start)
+	left := position + 1
+
+	if present || position >= 0 && int(rc.iv[position].last())+1 >= start {
+		left = position
+		if int(rc.iv[position].start) < start {
+			start = int(rc.iv[position].start)
+		}
+		if int(rc.iv[position].last()) > end {
+			end = int(rc.iv[position].last())
+		}
+	}
+
+	right := left
+	if left <= position {
+		right++
+	}
+	for right < len(rc.iv) && int(rc.iv[right].start) <= end+1 {
+		if int(rc.iv[right].last()) > end {
+			end = int(rc.iv[right].last())
+		}
+		right++
+	}
+
+	merged := newInterval16Range(uint16(start), uint16(end))
+	if left == right {
+		rc.iv = append(rc.iv, interval16{})
+		copy(rc.iv[left+1:], rc.iv[left:len(rc.iv)-1])
+		rc.iv[left] = merged
+		return
+	}
+
+	rc.iv[left] = merged
+	if right > left+1 {
+		copy(rc.iv[left+1:], rc.iv[right:])
+		rc.iv = rc.iv[:len(rc.iv)-(right-left-1)]
+	}
+}
+
+func (rc *runContainer16) inplaceUnionRuns(rc2 *runContainer16) {
+	originalLength := len(rc.iv)
+	totalLength := originalLength + len(rc2.iv)
+	var output []interval16
+	if cap(rc.iv) >= totalLength {
+		rc.iv = rc.iv[:totalLength]
+		output = rc.iv
+	} else {
+		output = make([]interval16, totalLength)
+	}
+
+	left, right := originalLength-1, len(rc2.iv)-1
+	outputIndex := totalLength
+	for left >= 0 || right >= 0 {
+		var merged interval16
+		if right < 0 || left >= 0 && rc.iv[left].last() >= rc2.iv[right].last() {
+			merged = rc.iv[left]
+			left--
+		} else {
+			merged = rc2.iv[right]
+			right--
+		}
+
+		for {
+			if left >= 0 && int(rc.iv[left].last())+1 >= int(merged.start) {
+				merged = mergeInterval16s(rc.iv[left], merged)
+				left--
+				continue
+			}
+			if right >= 0 && int(rc2.iv[right].last())+1 >= int(merged.start) {
+				merged = mergeInterval16s(rc2.iv[right], merged)
+				right--
+				continue
+			}
+			break
+		}
+
+		outputIndex--
+		output[outputIndex] = merged
+	}
+
+	if outputIndex > 0 {
+		copy(output, output[outputIndex:])
+	}
+	rc.iv = output[:totalLength-outputIndex]
 }
 
 // Such code should not be used as it will not preserve the container invariants:
