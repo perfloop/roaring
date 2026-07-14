@@ -119,10 +119,11 @@ func rangeOfOnes(start, last int) container {
 }
 
 type roaringArray struct {
-	keys            []uint16
-	containers      []container `msg:"-"` // don't try to serialize directly.
-	needCopyOnWrite []bool
-	copyOnWrite     bool
+	keys               []uint16
+	containers         []container `msg:"-"` // don't try to serialize directly.
+	needCopyOnWrite    []bool
+	copyOnWrite        bool
+	hasUnvalidatedRuns bool
 }
 
 func newRoaringArray() *roaringArray {
@@ -137,9 +138,36 @@ func newRoaringArray() *roaringArray {
 //	(possibly all) elements of ra.containers in-place with space
 //	optimized versions.
 func (ra *roaringArray) runOptimize() {
+	ra.normalizeUnvalidatedRuns()
 	for i := range ra.containers {
 		ra.containers[i] = ra.containers[i].toEfficientContainer()
 	}
+}
+
+func (ra *roaringArray) normalizeUnvalidatedRuns() {
+	if !ra.hasUnvalidatedRuns {
+		return
+	}
+
+	for i := 0; i < len(ra.containers); {
+		rc, ok := ra.containers[i].(*runContainer16)
+		if !ok || (len(rc.iv) > 0 && validRunIntervals(rc.iv)) {
+			i++
+			continue
+		}
+
+		normalized := newRunContainer16()
+		normalized.inplaceUnionValues(rc)
+		if normalized.isEmpty() {
+			ra.removeAtIndex(i)
+			continue
+		}
+		ra.containers[i] = normalized.toEfficientContainer()
+		ra.needCopyOnWrite[i] = false
+		i++
+	}
+
+	ra.hasUnvalidatedRuns = false
 }
 
 func (ra *roaringArray) appendContainer(key uint16, value container, mustCopyOnWrite bool) {
@@ -151,9 +179,11 @@ func (ra *roaringArray) appendContainer(key uint16, value container, mustCopyOnW
 func (ra *roaringArray) appendWithoutCopy(sa roaringArray, startingindex int) {
 	mustCopyOnWrite := sa.needCopyOnWrite[startingindex]
 	ra.appendContainer(sa.keys[startingindex], sa.containers[startingindex], mustCopyOnWrite)
+	ra.hasUnvalidatedRuns = ra.hasUnvalidatedRuns || sa.hasUnvalidatedRuns
 }
 
 func (ra *roaringArray) appendCopy(sa roaringArray, startingindex int) {
+	ra.hasUnvalidatedRuns = ra.hasUnvalidatedRuns || sa.hasUnvalidatedRuns
 	// cow only if the two request it, or if we already have a lightweight copy
 	copyonwrite := (ra.copyOnWrite && sa.copyOnWrite) || sa.needsCopyOnWrite(startingindex)
 	if !copyonwrite {
@@ -180,6 +210,7 @@ func (ra *roaringArray) appendCopyMany(sa roaringArray, startingindex, end int) 
 }
 
 func (ra *roaringArray) appendCopiesUntil(sa roaringArray, stoppingKey uint16) {
+	ra.hasUnvalidatedRuns = ra.hasUnvalidatedRuns || sa.hasUnvalidatedRuns
 	// cow only if the two request it, or if we already have a lightweight copy
 	copyonwrite := ra.copyOnWrite && sa.copyOnWrite
 
@@ -202,6 +233,7 @@ func (ra *roaringArray) appendCopiesUntil(sa roaringArray, stoppingKey uint16) {
 }
 
 func (ra *roaringArray) appendCopiesAfter(sa roaringArray, beforeStart uint16) {
+	ra.hasUnvalidatedRuns = ra.hasUnvalidatedRuns || sa.hasUnvalidatedRuns
 	// cow only if the two request it, or if we already have a lightweight copy
 	copyonwrite := ra.copyOnWrite && sa.copyOnWrite
 
@@ -253,11 +285,13 @@ func (ra *roaringArray) resize(newsize int) {
 func (ra *roaringArray) clear() {
 	ra.resize(0)
 	ra.copyOnWrite = false
+	ra.hasUnvalidatedRuns = false
 }
 
 func (ra *roaringArray) clone() *roaringArray {
 	sa := roaringArray{}
 	sa.copyOnWrite = ra.copyOnWrite
+	sa.hasUnvalidatedRuns = ra.hasUnvalidatedRuns
 
 	// this is where copyOnWrite is used.
 	if ra.copyOnWrite {
@@ -590,6 +624,7 @@ func (ra *roaringArray) readFrom(stream internal.ByteInput, cookieHeader ...byte
 	}
 	// If NextReturnsSafeSlice is false, then willNeedCopyOnWrite should be true
 	willNeedCopyOnWrite := !stream.NextReturnsSafeSlice()
+	ra.hasUnvalidatedRuns = false
 
 	var size uint32
 	var isRunBitmap []byte
@@ -671,6 +706,7 @@ func (ra *roaringArray) readFrom(stream internal.ByteInput, cookieHeader ...byte
 			}
 
 			ra.containers[i] = &nb
+			ra.hasUnvalidatedRuns = true
 		} else if card > arrayDefaultMaxSize {
 			// bitmap container
 			buf, err := stream.Next(arrayDefaultMaxSize * 2)

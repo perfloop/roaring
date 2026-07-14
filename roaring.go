@@ -1625,8 +1625,23 @@ func (rb *Bitmap) Xor(x2 *Bitmap) {
 	}
 }
 
+func normalizedBitmapForRunUnion(bitmap *Bitmap) *Bitmap {
+	if !bitmap.highlowcontainer.hasUnvalidatedRuns {
+		return bitmap
+	}
+
+	normalized := bitmap.Clone()
+	normalized.highlowcontainer.normalizeUnvalidatedRuns()
+	return normalized
+}
+
 // Or computes the union between two bitmaps and stores the result in the current bitmap
 func (rb *Bitmap) Or(x2 *Bitmap) {
+	rb.highlowcontainer.normalizeUnvalidatedRuns()
+	if rb != x2 {
+		x2 = normalizedBitmapForRunUnion(x2)
+	}
+
 	pos1 := 0
 	pos2 := 0
 	length1 := rb.highlowcontainer.size()

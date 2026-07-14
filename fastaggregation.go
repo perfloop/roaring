@@ -6,6 +6,9 @@ import (
 
 // Or function that requires repairAfterLazy
 func lazyOR(x1, x2 *Bitmap) *Bitmap {
+	x1 = normalizedBitmapForRunUnion(x1)
+	x2 = normalizedBitmapForRunUnion(x2)
+
 	answer := NewBitmap()
 	pos1 := 0
 	pos2 := 0
@@ -54,6 +57,11 @@ main:
 
 // In-place Or function that requires repairAfterLazy
 func (x1 *Bitmap) lazyOR(x2 *Bitmap) *Bitmap {
+	x1.highlowcontainer.normalizeUnvalidatedRuns()
+	if x1 != x2 {
+		x2 = normalizedBitmapForRunUnion(x2)
+	}
+
 	pos1 := 0
 	pos2 := 0
 	length1 := x1.highlowcontainer.size()
