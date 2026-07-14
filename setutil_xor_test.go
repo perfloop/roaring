@@ -13,8 +13,8 @@ func uint16Sequence(start, length int) []uint16 {
 	return values
 }
 
-func newSkewedXorArrayCases(totalCardinality int) []arrayXorBenchmarkCase {
-	return []arrayXorBenchmarkCase{
+func newSingletonXorArrayCases(totalCardinality int) []arrayXorBenchmarkCase {
+	cases := []arrayXorBenchmarkCase{
 		{
 			left:  &arrayContainer{content: uint16Sequence(0, 1)},
 			right: &arrayContainer{content: uint16Sequence(1, totalCardinality-1)},
@@ -36,10 +36,45 @@ func newSkewedXorArrayCases(totalCardinality int) []arrayXorBenchmarkCase {
 			want:  uint16Sequence(0, totalCardinality),
 		},
 	}
+	if totalCardinality != arrayDefaultMaxSize {
+		return cases
+	}
+
+	set := make([]uint16, totalCardinality-1)
+	for i := range set {
+		set[i] = uint16(2 * i)
+	}
+	middle := len(set) / 2
+	present := set[middle]
+	withoutPresent := append([]uint16{}, set[:middle]...)
+	withoutPresent = append(withoutPresent, set[middle+1:]...)
+	absent := present + 1
+	withAbsent := append([]uint16{}, set[:middle+1]...)
+	withAbsent = append(withAbsent, absent)
+	withAbsent = append(withAbsent, set[middle+1:]...)
+	after := set[len(set)-1] + 1
+	withAfter := append(append([]uint16{}, set...), after)
+
+	for _, test := range []struct {
+		singleton uint16
+		want      []uint16
+	}{
+		{singleton: present, want: withoutPresent},
+		{singleton: absent, want: withAbsent},
+		{singleton: after, want: withAfter},
+	} {
+		singleton := &arrayContainer{content: []uint16{test.singleton}}
+		array := &arrayContainer{content: set}
+		cases = append(cases,
+			arrayXorBenchmarkCase{left: singleton, right: array, want: test.want},
+			arrayXorBenchmarkCase{left: array, right: singleton, want: test.want},
+		)
+	}
+	return cases
 }
 
 func TestExclusiveUnion2by2TailCopy(t *testing.T) {
-	for _, tc := range newSkewedXorArrayCases(arrayDefaultMaxSize) {
+	for _, tc := range newSingletonXorArrayCases(arrayDefaultMaxSize) {
 		buffer := make([]uint16, len(tc.left.content)+len(tc.right.content))
 		length := exclusiveUnion2by2(tc.left.content, tc.right.content, buffer)
 		if got := buffer[:length]; !slices.Equal(got, tc.want) {
@@ -107,11 +142,11 @@ func requirePanic(t *testing.T, f func()) {
 }
 
 func BenchmarkArrayContainerXorTailCopyLarge(b *testing.B) {
-	benchmarkArrayXorCases(b, newSkewedXorArrayCases(arrayDefaultMaxSize))
+	benchmarkArrayXorCases(b, newSingletonXorArrayCases(arrayDefaultMaxSize))
 }
 
 func BenchmarkArrayContainerXorTailCopySmall(b *testing.B) {
-	benchmarkArrayXorCases(b, newSkewedXorArrayCases(9))
+	benchmarkArrayXorCases(b, newSingletonXorArrayCases(9))
 }
 
 func BenchmarkArrayContainerXorTailCopyShort(b *testing.B) {
