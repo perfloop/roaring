@@ -1,5 +1,18 @@
 package roaring
 
+func isContainerCardinalitySafe(c container) bool {
+	switch c := c.(type) {
+	case *arrayContainer:
+		return c.isCardinalitySafe()
+	case *bitmapContainer:
+		return c.isCardinalitySafe()
+	case *runContainer16:
+		return c.isCardinalitySafe()
+	default:
+		return false
+	}
+}
+
 func (ac *arrayContainer) isCardinalitySafe() bool {
 	if len(ac.content) == 0 || len(ac.content) > arrayDefaultMaxSize {
 		return false

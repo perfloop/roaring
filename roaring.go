@@ -1468,10 +1468,7 @@ main:
 }
 
 func containerOrCardinality(c1, c2 container) int {
-	if run, ok := c1.(*runContainer16); ok && !run.isCardinalitySafe() {
-		return c1.or(c2).getCardinality()
-	}
-	if run, ok := c2.(*runContainer16); ok && !run.isCardinalitySafe() {
+	if !isContainerCardinalitySafe(c1) || !isContainerCardinalitySafe(c2) {
 		return c1.or(c2).getCardinality()
 	}
 	return c1.orCardinality(c2)
