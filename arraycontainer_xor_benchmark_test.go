@@ -34,7 +34,10 @@ func benchmarkArrayXorCases(b *testing.B, cases []arrayXorBenchmarkCase) {
 	for i := 0; i < b.N; i++ {
 		tc := &cases[i%len(cases)]
 		result := tc.left.xorArray(tc.right).(*arrayContainer)
-		arrayXorBenchmarkSink += uint64(cap(result.content)) + uint64(result.content[len(result.content)-1])
+		arrayXorBenchmarkSink += uint64(cap(result.content))
+		if len(result.content) > 0 {
+			arrayXorBenchmarkSink += uint64(result.content[len(result.content)-1])
+		}
 	}
 }
 
