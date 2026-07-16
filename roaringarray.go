@@ -153,18 +153,24 @@ func (ra *roaringArray) appendWithoutCopy(sa roaringArray, startingindex int) {
 	ra.appendContainer(sa.keys[startingindex], sa.containers[startingindex], mustCopyOnWrite)
 }
 
-func (ra *roaringArray) appendCopy(sa roaringArray, startingindex int) {
+// copyContainerForAppend applies appendCopy's ownership policy without changing
+// the receiver's slice lengths.
+func (ra *roaringArray) copyContainerForAppend(sa roaringArray, index int) (container, bool) {
 	// cow only if the two request it, or if we already have a lightweight copy
-	copyonwrite := (ra.copyOnWrite && sa.copyOnWrite) || sa.needsCopyOnWrite(startingindex)
+	copyonwrite := (ra.copyOnWrite && sa.copyOnWrite) || sa.needsCopyOnWrite(index)
 	if !copyonwrite {
 		// since there is no copy-on-write, we need to clone the container (this is important)
-		ra.appendContainer(sa.keys[startingindex], sa.containers[startingindex].clone(), copyonwrite)
-	} else {
-		ra.appendContainer(sa.keys[startingindex], sa.containers[startingindex], copyonwrite)
-		if !sa.needsCopyOnWrite(startingindex) {
-			sa.setNeedsCopyOnWrite(startingindex)
-		}
+		return sa.containers[index].clone(), false
 	}
+	if !sa.needsCopyOnWrite(index) {
+		sa.setNeedsCopyOnWrite(index)
+	}
+	return sa.containers[index], true
+}
+
+func (ra *roaringArray) appendCopy(sa roaringArray, startingindex int) {
+	c, mustCopyOnWrite := ra.copyContainerForAppend(sa, startingindex)
+	ra.appendContainer(sa.keys[startingindex], c, mustCopyOnWrite)
 }
 
 func (ra *roaringArray) appendWithoutCopyMany(sa roaringArray, startingindex, end int) {
@@ -248,6 +254,32 @@ func (ra *roaringArray) resize(newsize int) {
 	ra.keys = ra.keys[:newsize]
 	ra.containers = ra.containers[:newsize]
 	ra.needCopyOnWrite = ra.needCopyOnWrite[:newsize]
+}
+
+func (ra *roaringArray) growTo(newsize int) {
+	if cap(ra.keys) < newsize {
+		keys := make([]uint16, newsize)
+		copy(keys, ra.keys)
+		ra.keys = keys
+	} else {
+		ra.keys = ra.keys[:newsize]
+	}
+
+	if cap(ra.containers) < newsize {
+		containers := make([]container, newsize)
+		copy(containers, ra.containers)
+		ra.containers = containers
+	} else {
+		ra.containers = ra.containers[:newsize]
+	}
+
+	if cap(ra.needCopyOnWrite) < newsize {
+		needCopyOnWrite := make([]bool, newsize)
+		copy(needCopyOnWrite, ra.needCopyOnWrite)
+		ra.needCopyOnWrite = needCopyOnWrite
+	} else {
+		ra.needCopyOnWrite = ra.needCopyOnWrite[:newsize]
+	}
 }
 
 func (ra *roaringArray) clear() {
@@ -343,6 +375,80 @@ func (ra *roaringArray) getUnionedWritableContainer(pos int, other container) co
 		return ra.getContainerAtIndex(pos).or(other)
 	}
 	return ra.getContainerAtIndex(pos).ior(other)
+}
+
+// mergeOrFrom merges the unprocessed suffixes after Bitmap.Or finds a source
+// key that must be inserted before a receiver key. It grows all metadata
+// slices once, then fills their final slots from back to front.
+func (ra *roaringArray) mergeOrFrom(other roaringArray, pos1, pos2 int) {
+	length1 := ra.size()
+	length2 := other.size()
+
+	sourceOnly := 0
+	left, right := pos1, pos2
+	for left < length1 && right < length2 {
+		leftKey := ra.getKeyAtIndex(left)
+		rightKey := other.getKeyAtIndex(right)
+		if leftKey < rightKey {
+			left++
+		} else if leftKey > rightKey {
+			sourceOnly++
+			right++
+		} else {
+			left++
+			right++
+		}
+	}
+	sourceOnly += length2 - right
+
+	lastReceiverKey := ra.getKeyAtIndex(length1 - 1)
+	appendStart := length2
+	for appendStart > pos2 && other.getKeyAtIndex(appendStart-1) > lastReceiverKey {
+		appendStart--
+	}
+
+	finalLength := length1 + sourceOnly
+	ra.growTo(finalLength)
+
+	destination := finalLength - 1
+	left, right = length1-1, length2-1
+	for left >= pos1 && right >= pos2 {
+		leftKey := ra.getKeyAtIndex(left)
+		rightKey := other.getKeyAtIndex(right)
+		if leftKey > rightKey {
+			ra.replaceKeyAndContainerAtIndex(destination, leftKey, ra.getContainerAtIndex(left), ra.needsCopyOnWrite(left))
+			left--
+		} else if leftKey < rightKey {
+			c, mustCopyOnWrite := ra.copyContainerForOr(other, right, appendStart)
+			ra.replaceKeyAndContainerAtIndex(destination, rightKey, c, mustCopyOnWrite)
+			right--
+		} else {
+			c := ra.getUnionedWritableContainer(left, other.getContainerAtIndex(right))
+			ra.replaceKeyAndContainerAtIndex(destination, leftKey, c, false)
+			left--
+			right--
+		}
+		destination--
+	}
+
+	for left >= pos1 {
+		ra.replaceKeyAndContainerAtIndex(destination, ra.getKeyAtIndex(left), ra.getContainerAtIndex(left), ra.needsCopyOnWrite(left))
+		left--
+		destination--
+	}
+	for right >= pos2 {
+		c, mustCopyOnWrite := ra.copyContainerForOr(other, right, appendStart)
+		ra.replaceKeyAndContainerAtIndex(destination, other.getKeyAtIndex(right), c, mustCopyOnWrite)
+		right--
+		destination--
+	}
+}
+
+func (ra *roaringArray) copyContainerForOr(other roaringArray, index, appendStart int) (container, bool) {
+	if index >= appendStart {
+		return ra.copyContainerForAppend(other, index)
+	}
+	return other.getContainerAtIndex(index).clone(), false
 }
 
 func (ra *roaringArray) getWritableContainerAtIndex(i int) container {
