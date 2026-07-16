@@ -16,20 +16,22 @@ func bitmapOrBulkMergeTailAdjacentFixture() bitmapOrBulkMergeFixture {
 
 func BenchmarkBitmapOrBulkMergeTailAdjacent(b *testing.B) {
 	b.Run("fresh-single-interior-4096", func(b *testing.B) {
-		fixture := bitmapOrBulkMergeTailAdjacentFixture()
+		b.Run("fresh-tail-adjacent-4096", func(b *testing.B) {
+			fixture := bitmapOrBulkMergeTailAdjacentFixture()
 
-		b.ReportAllocs()
-		var cardinality uint64
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			fixtureIndex := i & 1
-			receiver := fixture.lefts[fixtureIndex].Clone()
-			receiver.Or(fixture.rights[fixtureIndex])
-			cardinality += receiver.GetCardinality()
-		}
-		b.StopTimer()
-		if cardinality != fixture.cardinality*uint64(b.N) {
-			b.Fatalf("unexpected total cardinality: got %d, want %d", cardinality, fixture.cardinality*uint64(b.N))
-		}
+			b.ReportAllocs()
+			var cardinality uint64
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				fixtureIndex := i & 1
+				receiver := fixture.lefts[fixtureIndex].Clone()
+				receiver.Or(fixture.rights[fixtureIndex])
+				cardinality += receiver.GetCardinality()
+			}
+			b.StopTimer()
+			if cardinality != fixture.cardinality*uint64(b.N) {
+				b.Fatalf("unexpected total cardinality: got %d, want %d", cardinality, fixture.cardinality*uint64(b.N))
+			}
+		})
 	})
 }
