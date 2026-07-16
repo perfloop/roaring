@@ -421,7 +421,11 @@ func (ra *roaringArray) copyOrSourceContainerAt(other *roaringArray, index int, 
 	return other.containers[index].clone(), false
 }
 
-func (ra *roaringArray) orBulk(other *roaringArray, pos1, pos2 int) {
+func (ra *roaringArray) orBulk(other *roaringArray, pos1, pos2 int) bool {
+	if !ra.checkKeysSorted() || !other.checkKeysSorted() {
+		return false
+	}
+
 	length1 := ra.size()
 	length2 := other.size()
 	receiverLastKey := ra.getKeyAtIndex(length1 - 1)
@@ -481,6 +485,7 @@ func (ra *roaringArray) orBulk(other *roaringArray, pos1, pos2 int) {
 		right--
 		destination--
 	}
+	return true
 }
 
 func (ra *roaringArray) remove(key uint16) bool {
