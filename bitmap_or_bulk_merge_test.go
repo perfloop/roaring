@@ -5,6 +5,8 @@ import (
 	"testing"
 )
 
+const bitmapOrBulkMergeBatchSize = 32
+
 var bitmapOrBulkMergeSink uint64
 
 func bitmapWithSequentialHighKeys(start, count int, low uint16) *Bitmap {
@@ -118,10 +120,24 @@ func benchmarkBitmapOrBulkMerge(b *testing.B, receiver func() *Bitmap, source *B
 	b.ReportAllocs()
 	var total uint64
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		target := receiver()
-		target.Or(source)
-		total += target.GetCardinality()
+	for completed := 0; completed < b.N; {
+		batchSize := bitmapOrBulkMergeBatchSize
+		if remaining := b.N - completed; remaining < batchSize {
+			batchSize = remaining
+		}
+
+		b.StopTimer()
+		receivers := make([]*Bitmap, batchSize)
+		for i := range receivers {
+			receivers[i] = receiver()
+		}
+		b.StartTimer()
+
+		for _, target := range receivers {
+			target.Or(source)
+			total += target.GetCardinality()
+		}
+		completed += batchSize
 	}
 	b.StopTimer()
 
