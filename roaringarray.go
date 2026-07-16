@@ -381,6 +381,11 @@ func (ra *roaringArray) getUnionedWritableContainer(pos int, other container) co
 // key that must be inserted before a receiver key. It grows all metadata
 // slices once, then fills their final slots from back to front.
 func (ra *roaringArray) mergeOrFrom(other roaringArray, pos1, pos2 int) {
+	if !ra.checkKeysSorted() || !other.checkKeysSorted() {
+		ra.mergeOrFromForward(other, pos1, pos2)
+		return
+	}
+
 	length1 := ra.size()
 	length2 := other.size()
 
@@ -449,6 +454,33 @@ func (ra *roaringArray) copyContainerForOr(other roaringArray, index, appendStar
 		return ra.copyContainerForAppend(other, index)
 	}
 	return other.getContainerAtIndex(index).clone(), false
+}
+
+// mergeOrFromForward preserves the previous forward insertion behavior for
+// invalid arrays whose key ordering cannot support backward placement.
+func (ra *roaringArray) mergeOrFromForward(other roaringArray, pos1, pos2 int) {
+	length1 := ra.size()
+	length2 := other.size()
+	for pos1 < length1 && pos2 < length2 {
+		leftKey := ra.getKeyAtIndex(pos1)
+		rightKey := other.getKeyAtIndex(pos2)
+		if leftKey < rightKey {
+			pos1++
+		} else if leftKey > rightKey {
+			ra.insertNewKeyValueAt(pos1, rightKey, other.getContainerAtIndex(pos2).clone())
+			pos1++
+			length1++
+			pos2++
+		} else {
+			c := ra.getUnionedWritableContainer(pos1, other.getContainerAtIndex(pos2))
+			ra.replaceKeyAndContainerAtIndex(pos1, leftKey, c, false)
+			pos1++
+			pos2++
+		}
+	}
+	if pos1 == length1 {
+		ra.appendCopyMany(other, pos2, length2)
+	}
 }
 
 func (ra *roaringArray) getWritableContainerAtIndex(i int) container {
