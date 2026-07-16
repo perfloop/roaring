@@ -1626,12 +1626,16 @@ func (rb *Bitmap) Xor(x2 *Bitmap) {
 	}
 }
 
+// Delay suffix planning until enough interior inserts amortize its scans.
+const bulkMergeMinInsertions = 64
+
 // Or computes the union between two bitmaps and stores the result in the current bitmap
 func (rb *Bitmap) Or(x2 *Bitmap) {
 	pos1 := 0
 	pos2 := 0
 	length1 := rb.highlowcontainer.size()
 	length2 := x2.highlowcontainer.size()
+	insertions := 0
 main:
 	for (pos1 < length1) && (pos2 < length2) {
 		s1 := rb.highlowcontainer.getKeyAtIndex(pos1)
@@ -1645,8 +1649,22 @@ main:
 				}
 				s1 = rb.highlowcontainer.getKeyAtIndex(pos1)
 			} else if s1 > s2 {
-				rb.highlowcontainer.mergeOrFrom(x2.highlowcontainer, pos1, pos2)
-				return
+				rb.highlowcontainer.insertNewKeyValueAt(pos1, s2, x2.highlowcontainer.getContainerAtIndex(pos2).clone())
+				pos1++
+				length1++
+				pos2++
+				insertions++
+				if insertions == bulkMergeMinInsertions {
+					if pos2 < length2 {
+						rb.highlowcontainer.mergeOrFrom(x2.highlowcontainer, pos1, pos2)
+						return
+					}
+					break main
+				}
+				if pos2 == length2 {
+					break main
+				}
+				s2 = x2.highlowcontainer.getKeyAtIndex(pos2)
 			} else {
 				newcont := rb.highlowcontainer.getUnionedWritableContainer(pos1, x2.highlowcontainer.getContainerAtIndex(pos2))
 				rb.highlowcontainer.replaceKeyAndContainerAtIndex(pos1, s1, newcont, false)

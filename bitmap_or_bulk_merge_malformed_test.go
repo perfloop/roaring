@@ -7,16 +7,23 @@ import (
 )
 
 func TestBitmapOrBulkMergeMalformedSourceDoesNotPanic(t *testing.T) {
+	// Leave a malformed suffix after the threshold to exercise mergeOrFrom's fallback.
+	const sourceCount = bulkMergeMinInsertions + 4
+
 	source := NewBitmap()
-	for _, high := range []uint32{1, 2, 3, 4} {
-		source.Add(high << 16)
+	for i := 0; i < sourceCount; i++ {
+		source.Add(uint32(2*i+1) << 16)
 	}
 	data, err := source.ToBytes()
 	if err != nil {
 		t.Fatalf("serialize source: %v", err)
 	}
 
-	for i, key := range []uint16{1, 3, 4, 2} {
+	for i := 0; i < sourceCount; i++ {
+		key := uint16(2*i + 1)
+		if i == sourceCount-1 {
+			key = uint16(2*(sourceCount-3) + 1)
+		}
 		binary.LittleEndian.PutUint16(data[8+i*4:], key)
 	}
 
@@ -29,13 +36,13 @@ func TestBitmapOrBulkMergeMalformedSourceDoesNotPanic(t *testing.T) {
 	}
 
 	receiver := NewBitmap()
-	for _, high := range []uint32{2, 3, 4} {
-		receiver.Add(high << 16)
+	for i := 0; i <= sourceCount; i++ {
+		receiver.Add(uint32(2*i) << 16)
 	}
 
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			t.Fatalf("Or panicked for malformed source metadata: %v", recovered)
+			t.Fatalf("Or panicked for malformed source metadata after the merge threshold: %v", recovered)
 		}
 	}()
 	receiver.Or(malformed)
