@@ -2,6 +2,7 @@ package roaring
 
 import (
 	"container/heap"
+	"sync"
 )
 
 // Or function that requires repairAfterLazy
@@ -205,25 +206,62 @@ func HeapXor(bitmaps ...*Bitmap) *Bitmap {
 	return heap.Pop(&pq).(*item).value
 }
 
+type withPos struct {
+	bitmap *roaringArray
+	pos    int
+	key    uint16
+}
+
+var withPosPool = sync.Pool{
+	New: func() interface{} {
+		return &[]withPos{}
+	},
+}
+
+var keyContainersPool = sync.Pool{
+	New: func() interface{} {
+		return &[]container{}
+	},
+}
+
 // AndAny provides a result equivalent to x1.And(FastOr(bitmaps)).
 // It's optimized to minimize allocations. It also might be faster than separate calls.
 func (x1 *Bitmap) AndAny(bitmaps ...*Bitmap) {
 	if len(bitmaps) == 0 {
 		return
-	} else if len(bitmaps) == 1 {
-		x1.And(bitmaps[0])
+	}
+	if x1.IsEmpty() {
 		return
 	}
 
-	type withPos struct {
-		bitmap *roaringArray
-		pos    int
-		key    uint16
+	nonEmptyCount := 0
+	var lastNonEmpty *Bitmap
+	for _, b := range bitmaps {
+		if b != nil && !b.IsEmpty() {
+			nonEmptyCount++
+			lastNonEmpty = b
+		}
 	}
-	filters := make([]withPos, 0, len(bitmaps))
+
+	if nonEmptyCount == 0 {
+		x1.Clear()
+		return
+	}
+	if nonEmptyCount == 1 {
+		x1.And(lastNonEmpty)
+		return
+	}
+
+	filtersPtr := withPosPool.Get().(*[]withPos)
+	filters := *filtersPtr
+	if cap(filters) < nonEmptyCount {
+		filters = make([]withPos, 0, nonEmptyCount)
+	} else {
+		filters = filters[:0]
+	}
 
 	for _, b := range bitmaps {
-		if b.highlowcontainer.size() > 0 {
+		if b != nil && !b.IsEmpty() {
 			filters = append(filters, withPos{
 				bitmap: &b.highlowcontainer,
 				pos:    0,
@@ -234,7 +272,15 @@ func (x1 *Bitmap) AndAny(bitmaps ...*Bitmap) {
 
 	basePos := 0
 	intersections := 0
-	keyContainers := make([]container, 0, len(filters))
+
+	keyContainersPtr := keyContainersPool.Get().(*[]container)
+	keyContainers := *keyContainersPtr
+	if cap(keyContainers) < len(filters) {
+		keyContainers = make([]container, 0, len(filters))
+	} else {
+		keyContainers = keyContainers[:0]
+	}
+
 	var (
 		tmpArray   *arrayContainer
 		tmpBitmap  *bitmapContainer
@@ -317,4 +363,19 @@ func (x1 *Bitmap) AndAny(bitmaps ...*Bitmap) {
 	}
 
 	x1.highlowcontainer.resize(intersections)
+
+	// Zero out the entire capacity of the slices before putting them back to avoid memory leaks
+	fullFilters := filters[:cap(filters)]
+	for j := range fullFilters {
+		fullFilters[j] = withPos{}
+	}
+	*filtersPtr = filters[:0]
+	withPosPool.Put(filtersPtr)
+
+	fullKeyContainers := keyContainers[:cap(keyContainers)]
+	for j := range fullKeyContainers {
+		fullKeyContainers[j] = nil
+	}
+	*keyContainersPtr = keyContainers[:0]
+	keyContainersPool.Put(keyContainersPtr)
 }
