@@ -12,8 +12,7 @@ func BenchmarkAndAnyFastEmptyBase(b *testing.B) {
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		clone := base.Clone()
-		clone.AndAny(filters...)
+		base.AndAny(filters...)
 	}
 }
 

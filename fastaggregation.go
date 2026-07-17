@@ -215,21 +215,16 @@ func (x1 *Bitmap) AndAny(bitmaps ...*Bitmap) {
 		return
 	}
 
-	nonEmptyCount := 0
-	var lastNonEmpty *Bitmap
+	hasNonEmpty := false
 	for _, b := range bitmaps {
-		if b != nil && !b.IsEmpty() {
-			nonEmptyCount++
-			lastNonEmpty = b
+		if !b.IsEmpty() {
+			hasNonEmpty = true
+			break
 		}
 	}
 
-	if nonEmptyCount == 0 {
+	if !hasNonEmpty {
 		x1.Clear()
-		return
-	}
-	if nonEmptyCount == 1 {
-		x1.And(lastNonEmpty)
 		return
 	}
 
@@ -238,10 +233,15 @@ func (x1 *Bitmap) AndAny(bitmaps ...*Bitmap) {
 		pos    int
 		key    uint16
 	}
-	filters := make([]withPos, 0, len(bitmaps))
+
+	var localFilters [16]withPos
+	filters := localFilters[:0]
+	if len(bitmaps) > 16 {
+		filters = make([]withPos, 0, len(bitmaps))
+	}
 
 	for _, b := range bitmaps {
-		if b != nil && !b.IsEmpty() {
+		if !b.IsEmpty() {
 			filters = append(filters, withPos{
 				bitmap: &b.highlowcontainer,
 				pos:    0,
@@ -252,7 +252,13 @@ func (x1 *Bitmap) AndAny(bitmaps ...*Bitmap) {
 
 	basePos := 0
 	intersections := 0
-	keyContainers := make([]container, 0, len(filters))
+
+	var localKeyContainers [16]container
+	keyContainers := localKeyContainers[:0]
+	if len(filters) > 16 {
+		keyContainers = make([]container, 0, len(filters))
+	}
+
 	var (
 		tmpArray   *arrayContainer
 		tmpBitmap  *bitmapContainer
