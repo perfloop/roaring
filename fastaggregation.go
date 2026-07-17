@@ -232,7 +232,7 @@ func (x1 *Bitmap) AndAny(bitmaps ...*Bitmap) {
 	}
 
 	for _, b := range bitmaps {
-		if !b.IsEmpty() {
+		if b.highlowcontainer.size() > 0 {
 			filters = append(filters, withPos{
 				bitmap: &b.highlowcontainer,
 				pos:    0,
