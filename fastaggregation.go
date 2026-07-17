@@ -214,6 +214,10 @@ func (x1 *Bitmap) AndAny(bitmaps ...*Bitmap) {
 	if x1.IsEmpty() {
 		return
 	}
+	if len(bitmaps) == 1 {
+		x1.And(bitmaps[0])
+		return
+	}
 
 	type withPos struct {
 		bitmap *roaringArray
