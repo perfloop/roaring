@@ -2,7 +2,6 @@ package roaring
 
 import (
 	"container/heap"
-	"sync"
 )
 
 // Or function that requires repairAfterLazy
@@ -206,24 +205,6 @@ func HeapXor(bitmaps ...*Bitmap) *Bitmap {
 	return heap.Pop(&pq).(*item).value
 }
 
-type withPos struct {
-	bitmap *roaringArray
-	pos    int
-	key    uint16
-}
-
-var withPosPool = sync.Pool{
-	New: func() interface{} {
-		return &[]withPos{}
-	},
-}
-
-var keyContainersPool = sync.Pool{
-	New: func() interface{} {
-		return &[]container{}
-	},
-}
-
 // AndAny provides a result equivalent to x1.And(FastOr(bitmaps)).
 // It's optimized to minimize allocations. It also might be faster than separate calls.
 func (x1 *Bitmap) AndAny(bitmaps ...*Bitmap) {
@@ -252,13 +233,12 @@ func (x1 *Bitmap) AndAny(bitmaps ...*Bitmap) {
 		return
 	}
 
-	filtersPtr := withPosPool.Get().(*[]withPos)
-	filters := *filtersPtr
-	if cap(filters) < nonEmptyCount {
-		filters = make([]withPos, 0, nonEmptyCount)
-	} else {
-		filters = filters[:0]
+	type withPos struct {
+		bitmap *roaringArray
+		pos    int
+		key    uint16
 	}
+	filters := make([]withPos, 0, len(bitmaps))
 
 	for _, b := range bitmaps {
 		if b != nil && !b.IsEmpty() {
@@ -272,15 +252,7 @@ func (x1 *Bitmap) AndAny(bitmaps ...*Bitmap) {
 
 	basePos := 0
 	intersections := 0
-
-	keyContainersPtr := keyContainersPool.Get().(*[]container)
-	keyContainers := *keyContainersPtr
-	if cap(keyContainers) < len(filters) {
-		keyContainers = make([]container, 0, len(filters))
-	} else {
-		keyContainers = keyContainers[:0]
-	}
-
+	keyContainers := make([]container, 0, len(filters))
 	var (
 		tmpArray   *arrayContainer
 		tmpBitmap  *bitmapContainer
@@ -363,19 +335,4 @@ func (x1 *Bitmap) AndAny(bitmaps ...*Bitmap) {
 	}
 
 	x1.highlowcontainer.resize(intersections)
-
-	// Zero out the entire capacity of the slices before putting them back to avoid memory leaks
-	fullFilters := filters[:cap(filters)]
-	for j := range fullFilters {
-		fullFilters[j] = withPos{}
-	}
-	*filtersPtr = filters[:0]
-	withPosPool.Put(filtersPtr)
-
-	fullKeyContainers := keyContainers[:cap(keyContainers)]
-	for j := range fullKeyContainers {
-		fullKeyContainers[j] = nil
-	}
-	*keyContainersPtr = keyContainers[:0]
-	keyContainersPool.Put(keyContainersPtr)
 }
