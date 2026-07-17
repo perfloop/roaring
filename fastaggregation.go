@@ -215,19 +215,6 @@ func (x1 *Bitmap) AndAny(bitmaps ...*Bitmap) {
 		return
 	}
 
-	hasNonEmpty := false
-	for _, b := range bitmaps {
-		if !b.IsEmpty() {
-			hasNonEmpty = true
-			break
-		}
-	}
-
-	if !hasNonEmpty {
-		x1.Clear()
-		return
-	}
-
 	type withPos struct {
 		bitmap *roaringArray
 		pos    int
@@ -248,6 +235,11 @@ func (x1 *Bitmap) AndAny(bitmaps ...*Bitmap) {
 				key:    b.highlowcontainer.getKeyAtIndex(0),
 			})
 		}
+	}
+
+	if len(filters) == 0 {
+		x1.Clear()
+		return
 	}
 
 	basePos := 0
