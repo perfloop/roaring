@@ -241,25 +241,106 @@ func benchmarkBitmapOrBulkMerge(b *testing.B, fixture bitmapOrBulkMergeFixture) 
 	}
 }
 
-func BenchmarkBitmapOrBulkMerge(b *testing.B) {
-	for _, benchmark := range bitmapOrBulkMergeFixtureCases() {
-		benchmark := benchmark
-		b.Run(benchmark.name, func(b *testing.B) {
-			benchmarkBitmapOrBulkMerge(b, benchmark.new())
+type bitmapOrBulkMergeSerializedPair struct {
+	left  []byte
+	right []byte
+}
+
+type bitmapOrBulkMergeLoadedFixture struct {
+	portable    [2]bitmapOrBulkMergeSerializedPair
+	frozen      [2]bitmapOrBulkMergeSerializedPair
+	wants       [2]*Bitmap
+	cardinality uint64
+}
+
+func newBitmapOrBulkMergeLoadedFixture() bitmapOrBulkMergeLoadedFixture {
+	source := bitmapOrBulkMergeInterleavedFixture(4096, false)
+	fixture := bitmapOrBulkMergeLoadedFixture{
+		wants:       source.wants,
+		cardinality: source.cardinality,
+	}
+	for variant := range source.lefts {
+		portableLeft, err := source.lefts[variant].ToBytes()
+		if err != nil {
+			panic(err)
+		}
+		portableRight, err := source.rights[variant].ToBytes()
+		if err != nil {
+			panic(err)
+		}
+		frozenLeft, err := source.lefts[variant].Freeze()
+		if err != nil {
+			panic(err)
+		}
+		frozenRight, err := source.rights[variant].Freeze()
+		if err != nil {
+			panic(err)
+		}
+		fixture.portable[variant] = bitmapOrBulkMergeSerializedPair{left: portableLeft, right: portableRight}
+		fixture.frozen[variant] = bitmapOrBulkMergeSerializedPair{left: frozenLeft, right: frozenRight}
+	}
+	return fixture
+}
+
+func bitmapOrBulkMergeReadFrom(receiver *Bitmap, data []byte) error {
+	_, err := receiver.ReadFrom(bytes.NewReader(data))
+	return err
+}
+
+func bitmapOrBulkMergeFrozenView(receiver *Bitmap, data []byte) error {
+	return receiver.FrozenView(data)
+}
+
+func TestBitmapOrBulkMergeLoadedFixtures(t *testing.T) {
+	fixture := newBitmapOrBulkMergeLoadedFixture()
+	for _, test := range []struct {
+		name  string
+		pairs [2]bitmapOrBulkMergeSerializedPair
+		load  func(*Bitmap, []byte) error
+	}{
+		{name: "read-from", pairs: fixture.portable, load: bitmapOrBulkMergeReadFrom},
+		{name: "frozen-view", pairs: fixture.frozen, load: bitmapOrBulkMergeFrozenView},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for variant, pair := range test.pairs {
+				receiver := New()
+				if err := test.load(receiver, pair.left); err != nil {
+					t.Fatalf("load receiver: %v", err)
+				}
+				source := New()
+				if err := test.load(source, pair.right); err != nil {
+					t.Fatalf("load source: %v", err)
+				}
+				receiver.Or(source)
+				if !receiver.Equals(fixture.wants[variant]) {
+					t.Fatalf("unexpected union for fixture %d", variant)
+				}
+				if err := receiver.Validate(); err != nil {
+					t.Fatalf("union produced an invalid bitmap: %v", err)
+				}
+			}
 		})
 	}
 }
 
-func benchmarkBitmapLoadBoundary(b *testing.B, fixture bitmapLoadBoundaryFixture, load func(*Bitmap) error) {
+func benchmarkBitmapOrBulkMergeLoaded(b *testing.B, fixture bitmapOrBulkMergeLoadedFixture, pairs [2]bitmapOrBulkMergeSerializedPair, load func(*Bitmap, []byte) error) {
 	b.ReportAllocs()
+	fixtureIndex := 0
 	var cardinality uint64
 	b.ResetTimer()
 	for b.Loop() {
+		pair := pairs[fixtureIndex]
 		receiver := New()
-		if err := load(receiver); err != nil {
+		if err := load(receiver, pair.left); err != nil {
 			b.Fatal(err)
 		}
+		source := New()
+		if err := load(source, pair.right); err != nil {
+			b.Fatal(err)
+		}
+		receiver.Or(source)
 		cardinality += receiver.GetCardinality()
+		fixtureIndex ^= 1
 	}
 	b.StopTimer()
 	if cardinality != fixture.cardinality*uint64(b.N) {
@@ -267,18 +348,19 @@ func benchmarkBitmapLoadBoundary(b *testing.B, fixture bitmapLoadBoundaryFixture
 	}
 }
 
-func BenchmarkBitmapLoadBoundary(b *testing.B) {
-	b.Run("read-from-sorted-4096", func(b *testing.B) {
-		fixture := newBitmapLoadBoundaryFixture(4096)
-		benchmarkBitmapLoadBoundary(b, fixture, func(receiver *Bitmap) error {
-			_, err := receiver.ReadFrom(bytes.NewReader(fixture.portable))
-			return err
+func BenchmarkBitmapOrBulkMerge(b *testing.B) {
+	for _, benchmark := range bitmapOrBulkMergeFixtureCases() {
+		benchmark := benchmark
+		b.Run(benchmark.name, func(b *testing.B) {
+			benchmarkBitmapOrBulkMerge(b, benchmark.new())
 		})
+	}
+	b.Run("loaded-read-from-interleaved-4096", func(b *testing.B) {
+		fixture := newBitmapOrBulkMergeLoadedFixture()
+		benchmarkBitmapOrBulkMergeLoaded(b, fixture, fixture.portable, bitmapOrBulkMergeReadFrom)
 	})
-	b.Run("frozen-view-sorted-4096", func(b *testing.B) {
-		fixture := newBitmapLoadBoundaryFixture(4096)
-		benchmarkBitmapLoadBoundary(b, fixture, func(receiver *Bitmap) error {
-			return receiver.FrozenView(fixture.frozen)
-		})
+	b.Run("loaded-frozen-view-interleaved-4096", func(b *testing.B) {
+		fixture := newBitmapOrBulkMergeLoadedFixture()
+		benchmarkBitmapOrBulkMergeLoaded(b, fixture, fixture.frozen, bitmapOrBulkMergeFrozenView)
 	})
 }
