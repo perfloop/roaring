@@ -168,11 +168,6 @@ func TestBitmapOrBulkMergeFallsBackForUnsortedKeys(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			probe := test.receiver.Clone()
-			if probe.highlowcontainer.orBulk(&test.source.highlowcontainer, 0, 0) {
-				t.Fatal("bulk merge accepted unsorted metadata")
-			}
-
 			want := test.receiver.Clone()
 			bitmapOrBulkMergeForwardOr(want, test.source)
 			got := test.receiver.Clone()
@@ -184,5 +179,64 @@ func TestBitmapOrBulkMergeFallsBackForUnsortedKeys(t *testing.T) {
 			got.Or(test.source)
 			assertBitmapOrBulkMergeState(t, got, want)
 		})
+	}
+}
+
+func TestBitmapOrBulkMergeReadFromPropagatesUnorderedKeys(t *testing.T) {
+	source := BitmapOf(
+		uint32(1)<<16|1,
+		uint32(2)<<16|1,
+		uint32(3)<<16|1,
+	)
+	serialized, err := source.ToBytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binary.LittleEndian.Uint32(serialized[:4]) != serialCookieNoRunContainer {
+		t.Fatal("unexpected serialized source layout")
+	}
+	ordered := NewBitmap()
+	if _, err := ordered.ReadFrom(bytes.NewReader(serialized)); err != nil {
+		t.Fatal(err)
+	}
+	if ordered.highlowcontainer.keysMayBeUnordered {
+		t.Fatal("ordered decoded keys retained the unordered-key state")
+	}
+	binary.LittleEndian.PutUint16(serialized[8+4:], 3)
+	binary.LittleEndian.PutUint16(serialized[8+8:], 1)
+
+	decoded := NewBitmap()
+	if _, err := decoded.ReadFrom(bytes.NewReader(serialized)); err != nil {
+		t.Fatal(err)
+	}
+	if err := decoded.Validate(); err != ErrKeySortOrder {
+		t.Fatalf("unexpected validation error: %v", err)
+	}
+
+	receiver := BitmapOf(uint32(2)<<16 | 2)
+	receiver.Or(decoded)
+	if !receiver.highlowcontainer.keysMayBeUnordered {
+		t.Fatal("receiver lost the unordered-key state")
+	}
+
+	wantKeys := []uint16{1, 2, 3, 1}
+	wantValues := []uint16{1, 2, 1, 1}
+	if receiver.highlowcontainer.size() != len(wantKeys) {
+		t.Fatalf("unexpected container count: got %d, want %d", receiver.highlowcontainer.size(), len(wantKeys))
+	}
+	for index, wantKey := range wantKeys {
+		if gotKey := receiver.highlowcontainer.getKeyAtIndex(index); gotKey != wantKey {
+			t.Fatalf("unexpected key at %d: got %d, want %d", index, gotKey, wantKey)
+		}
+		container := receiver.highlowcontainer.getContainerAtIndex(index)
+		if container.getCardinality() != 1 || !container.contains(wantValues[index]) {
+			t.Fatalf("unexpected container at %d", index)
+		}
+		if receiver.highlowcontainer.needsCopyOnWrite(index) {
+			t.Fatalf("unexpected copy-on-write marker at %d", index)
+		}
+	}
+	if err := receiver.Validate(); err != ErrKeySortOrder {
+		t.Fatalf("unexpected receiver validation error: %v", err)
 	}
 }

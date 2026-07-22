@@ -1632,7 +1632,12 @@ func (rb *Bitmap) Or(x2 *Bitmap) {
 	pos2 := 0
 	length1 := rb.highlowcontainer.size()
 	length2 := x2.highlowcontainer.size()
-	bulkMergeAvailable := true
+	// Deserialization preserves malformed key metadata, so retain the
+	// established forward merge behavior for an unordered input.
+	bulkMergeAvailable := !rb.highlowcontainer.keysMayBeUnordered && !x2.highlowcontainer.keysMayBeUnordered
+	if !bulkMergeAvailable {
+		rb.highlowcontainer.keysMayBeUnordered = true
+	}
 main:
 	for (pos1 < length1) && (pos2 < length2) {
 		s1 := rb.highlowcontainer.getKeyAtIndex(pos1)

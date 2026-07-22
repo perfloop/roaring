@@ -123,6 +123,8 @@ type roaringArray struct {
 	containers      []container `msg:"-"` // don't try to serialize directly.
 	needCopyOnWrite []bool
 	copyOnWrite     bool
+	// Set when deserialization finds key metadata that is not strictly ordered.
+	keysMayBeUnordered bool
 }
 
 func newRoaringArray() *roaringArray {
@@ -253,11 +255,13 @@ func (ra *roaringArray) resize(newsize int) {
 func (ra *roaringArray) clear() {
 	ra.resize(0)
 	ra.copyOnWrite = false
+	ra.keysMayBeUnordered = false
 }
 
 func (ra *roaringArray) clone() *roaringArray {
 	sa := roaringArray{}
 	sa.copyOnWrite = ra.copyOnWrite
+	sa.keysMayBeUnordered = ra.keysMayBeUnordered
 
 	// this is where copyOnWrite is used.
 	if ra.copyOnWrite {
@@ -422,10 +426,6 @@ func (ra *roaringArray) copyOrSourceContainerAt(other *roaringArray, index int, 
 }
 
 func (ra *roaringArray) orBulk(other *roaringArray, pos1, pos2 int) bool {
-	if !ra.checkKeysSorted() || !other.checkKeysSorted() {
-		return false
-	}
-
 	length1 := ra.size()
 	length2 := other.size()
 	receiverLastKey := ra.getKeyAtIndex(length1 - 1)
@@ -679,6 +679,7 @@ func (ra *roaringArray) toBytes() ([]byte, error) {
 
 // Reads a serialized roaringArray from a byte slice.
 func (ra *roaringArray) readFrom(stream internal.ByteInput, cookieHeader ...byte) (int64, error) {
+	ra.keysMayBeUnordered = true
 	var cookie uint32
 	var err error
 	if len(cookieHeader) > 0 && len(cookieHeader) != 4 {
@@ -803,6 +804,7 @@ func (ra *roaringArray) readFrom(stream internal.ByteInput, cookieHeader ...byte
 		}
 	}
 
+	ra.keysMayBeUnordered = !ra.checkKeysSorted()
 	return stream.GetReadBytes(), nil
 }
 
