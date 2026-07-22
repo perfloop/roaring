@@ -370,6 +370,7 @@ func (ra *roaringArray) getKeyAtIndex(i int) uint16 {
 }
 
 func (ra *roaringArray) insertNewKeyValueAt(i int, key uint16, value container) {
+	bitmapOrBulkMergeProbeInsert()
 	ra.keys = append(ra.keys, 0)
 	ra.containers = append(ra.containers, nil)
 
