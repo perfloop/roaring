@@ -323,7 +323,8 @@ func (rb *Bitmap) FromUnsafeBytes(data []byte, cookieHeader ...byte) (p int64, e
 
 // ReadFrom reads a serialized version of this bitmap from stream.
 // E.g., you can use this method to read a serialized bitmap from a file written
-// with the WriteTo method.
+// with the WriteTo method. It rejects malformed high-key ordering; call Validate
+// after deserialization to check the remaining bitmap invariants.
 // The format is compatible with other RoaringBitmap
 // implementations (Java, C) and is documented here:
 // https://github.com/RoaringBitmap/RoaringFormatSpec
@@ -1645,6 +1646,11 @@ main:
 				}
 				s1 = rb.highlowcontainer.getKeyAtIndex(pos1)
 			} else if s1 > s2 {
+				// A single remaining source key stays on the existing insertion path.
+				if pos2+1 < length2 {
+					rb.highlowcontainer.orBulk(&x2.highlowcontainer, pos1, pos2)
+					return
+				}
 				rb.highlowcontainer.insertNewKeyValueAt(pos1, s2, x2.highlowcontainer.getContainerAtIndex(pos2).clone())
 				pos1++
 				length1++

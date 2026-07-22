@@ -5,6 +5,7 @@ package roaring
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"reflect"
@@ -134,6 +135,26 @@ func TestFrozenFormat(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFrozenViewRejectsUnsortedKeys(t *testing.T) {
+	source := BitmapOf(uint32(1)<<16|1, uint32(2)<<16|1)
+	serialized, err := source.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	header := binary.LittleEndian.Uint32(serialized[len(serialized)-4:])
+	containers := int(header >> 15)
+	if containers != 2 {
+		t.Fatalf("unexpected container count: got %d, want 2", containers)
+	}
+	keysOffset := len(serialized) - 4 - 5*containers
+	binary.LittleEndian.PutUint16(serialized[keysOffset:], 2)
+	binary.LittleEndian.PutUint16(serialized[keysOffset+2:], 1)
+
+	err = New().FrozenView(serialized)
+	assert.ErrorIs(t, err, ErrKeySortOrder)
 }
 
 func TestBitMapValidationFromFrozen(t *testing.T) {

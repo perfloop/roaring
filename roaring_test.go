@@ -237,6 +237,96 @@ func TestRoaring_OrThenAnd_RunOptimize(t *testing.T) {
 	require.NoError(t, mask.Validate())
 }
 
+func TestBitmapOrBulkMerge(t *testing.T) {
+	newInputs := func() (left, right *Bitmap) {
+		left = BitmapOf(uint32(2)<<16, uint32(4)<<16, uint32(6)<<16, uint32(8)<<16)
+		right = BitmapOf(
+			uint32(1)<<16|1,
+			uint32(4)<<16|1,
+			uint32(5)<<16|1,
+			uint32(8)<<16|1,
+			uint32(9)<<16|1,
+		)
+		return left, right
+	}
+
+	t.Run("mixed high keys", func(t *testing.T) {
+		left, right := newInputs()
+		receiver := left.Clone()
+		receiver.Or(right)
+
+		want := BitmapOf(
+			uint32(1)<<16|1,
+			uint32(2)<<16,
+			uint32(4)<<16,
+			uint32(4)<<16|1,
+			uint32(5)<<16|1,
+			uint32(6)<<16,
+			uint32(8)<<16,
+			uint32(8)<<16|1,
+			uint32(9)<<16|1,
+		)
+		assert.True(t, receiver.Equals(want))
+
+		receiver.Add(uint32(1)<<16 | 2)
+		assert.False(t, right.Contains(uint32(1)<<16|2))
+		right.Add(uint32(1)<<16 | 3)
+		assert.False(t, receiver.Contains(uint32(1)<<16|3))
+		receiver.Add(uint32(9)<<16 | 2)
+		assert.False(t, right.Contains(uint32(9)<<16|2))
+		right.Add(uint32(9)<<16 | 3)
+		assert.False(t, receiver.Contains(uint32(9)<<16|3))
+		for name, bitmap := range map[string]*Bitmap{"receiver": receiver, "left": left, "right": right} {
+			require.NoError(t, bitmap.Validate(), "%s became invalid", name)
+		}
+	})
+
+	t.Run("copy-on-write ownership", func(t *testing.T) {
+		cowLeft, cowRight := newInputs()
+		cowLeft.SetCopyOnWrite(true)
+		cowRight.SetCopyOnWrite(true)
+		receiver := cowLeft.Clone()
+		receiver.Or(cowRight)
+
+		receiver.Add(uint32(1)<<16 | 2)
+		assert.False(t, cowRight.Contains(uint32(1)<<16|2))
+		cowRight.Add(uint32(1)<<16 | 3)
+		assert.False(t, receiver.Contains(uint32(1)<<16|3))
+		receiver.Add(uint32(9)<<16 | 2)
+		assert.False(t, cowRight.Contains(uint32(9)<<16|2))
+		cowRight.Add(uint32(9)<<16 | 3)
+		assert.False(t, receiver.Contains(uint32(9)<<16|3))
+		for name, bitmap := range map[string]*Bitmap{"receiver": receiver, "left": cowLeft, "right": cowRight} {
+			require.NoError(t, bitmap.Validate(), "%s became invalid", name)
+		}
+	})
+
+	t.Run("random sorted high keys", func(t *testing.T) {
+		random := rand.New(rand.NewSource(1))
+		for trial := 0; trial < 100; trial++ {
+			receiverSource := BitmapOf(uint32(2) << 16)
+			source := BitmapOf(uint32(1)<<16|1, uint32(3)<<16|1)
+			for key := 4; key < 256; key++ {
+				if random.Intn(2) == 0 {
+					receiverSource.Add(uint32(key) << 16)
+				}
+				if random.Intn(2) == 0 {
+					source.Add(uint32(key)<<16 | 1)
+				}
+			}
+
+			want := receiverSource.Clone()
+			for _, value := range source.ToArray() {
+				want.Add(value)
+			}
+			receiver := receiverSource.Clone()
+			receiver.Or(source)
+			require.True(t, receiver.Equals(want), "trial %d", trial)
+			require.NoError(t, receiver.Validate(), "trial %d", trial)
+		}
+	})
+}
+
 func TestSplitter_BrokeBm(t *testing.T) {
 	bm1 := NewBitmap()
 	bm2 := NewBitmap()

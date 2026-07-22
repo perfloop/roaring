@@ -62,6 +62,19 @@ func TestSerializationBasic037(t *testing.T) {
 	assert.True(t, rb.Equals(newrb))
 }
 
+func TestReadFromRejectsUnsortedKeys(t *testing.T) {
+	source := BitmapOf(uint32(1)<<16|1, uint32(2)<<16|1)
+	serialized, err := source.ToBytes()
+	require.NoError(t, err)
+	require.Equal(t, uint32(serialCookieNoRunContainer), binary.LittleEndian.Uint32(serialized[:4]))
+
+	binary.LittleEndian.PutUint16(serialized[8:], 2)
+	binary.LittleEndian.PutUint16(serialized[12:], 1)
+
+	_, err = New().ReadFrom(bytes.NewReader(serialized))
+	assert.ErrorIs(t, err, ErrKeySortOrder)
+}
+
 func TestSerializationToFile038(t *testing.T) {
 	rb := BitmapOf(1, 2, 3, 4, 5, 100, 1000)
 	fname := filepath.Join(t.TempDir(), "myfile.bin")

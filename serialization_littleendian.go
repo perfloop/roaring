@@ -162,7 +162,7 @@ func byteSliceAsBoolSlice(slice []byte) (result []bool) {
 }
 
 // FrozenView creates a static view of a serialized bitmap stored in buf.
-// It uses CRoaring's frozen bitmap format.
+// It uses CRoaring's frozen bitmap format and rejects malformed high-key ordering.
 //
 // The format specification is available here:
 // https://github.com/RoaringBitmap/CRoaring/blob/2c867e9f9c9e2a3a7032791f94c4c7ae3013f6e0/src/roaring.c#L2756-L2783
@@ -284,6 +284,9 @@ func (ra *roaringArray) frozenView(buf []byte) error {
 
 	keys := byteSliceAsUint16Slice(buf[len(buf)-2*nCont:])
 	buf = buf[:len(buf)-2*nCont]
+	if !keysAreSorted(keys) {
+		return ErrKeySortOrder
+	}
 
 	nBitmap, nArray, nRun := 0, 0, 0
 	nArrayEl, nRunEl := 0, 0
