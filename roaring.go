@@ -13,7 +13,6 @@ import (
 	"math/bits"
 	"slices"
 	"strconv"
-	"sync"
 
 	"github.com/RoaringBitmap/roaring/v2/internal"
 	"github.com/bits-and-blooms/bitset"
@@ -1928,15 +1927,6 @@ main:
 	return answer
 }
 
-const addManyChunkSize = 65536
-
-var addManyBufferPool = sync.Pool{
-	New: func() interface{} {
-		buf := make([]uint32, addManyChunkSize)
-		return &buf
-	},
-}
-
 // AddMany add all of the values in dat
 func (rb *Bitmap) AddMany(dat []uint32) {
 	if len(dat) == 0 {
@@ -1953,18 +1943,27 @@ func (rb *Bitmap) AddMany(dat []uint32) {
 			}
 			group := dat[i:j]
 
-			capSize := len(group)
-			if capSize > 65536 {
-				capSize = 65536
-			}
-			lows := make([]uint16, 0, capSize)
-			prevLow := lowbits(group[0])
-			lows = append(lows, prevLow)
+			// Count unique lowbits in group to pre-allocate with exact capacity
+			uniqueCount := 1
+			prevVal := lowbits(group[0])
 			for k := 1; k < len(group); k++ {
 				currLow := lowbits(group[k])
-				if currLow != prevLow {
-					lows = append(lows, currLow)
-					prevLow = currLow
+				if currLow != prevVal {
+					uniqueCount++
+					prevVal = currLow
+				}
+			}
+
+			lows := make([]uint16, uniqueCount)
+			lows[0] = lowbits(group[0])
+			writeIdx := 1
+			prevVal = lows[0]
+			for k := 1; k < len(group); k++ {
+				currLow := lowbits(group[k])
+				if currLow != prevVal {
+					lows[writeIdx] = currLow
+					writeIdx++
+					prevVal = currLow
 				}
 			}
 
@@ -1973,13 +1972,7 @@ func (rb *Bitmap) AddMany(dat []uint32) {
 				tempAC := &arrayContainer{content: lows}
 				tempC = tempAC.toBitmapContainer()
 			} else {
-				if cap(lows) > len(lows)+64 {
-					perfectLows := make([]uint16, len(lows))
-					copy(perfectLows, lows)
-					tempC = &arrayContainer{content: perfectLows}
-				} else {
-					tempC = &arrayContainer{content: lows}
-				}
+				tempC = &arrayContainer{content: lows}
 			}
 
 			ra := &rb.highlowcontainer
@@ -1996,69 +1989,17 @@ func (rb *Bitmap) AddMany(dat []uint32) {
 		return
 	}
 
-	for offset := 0; offset < len(dat); offset += addManyChunkSize {
-		chunkLen := len(dat) - offset
-		if chunkLen > addManyChunkSize {
-			chunkLen = addManyChunkSize
+	// For unsorted inputs, fall back to the simple, allocation-free sequential loop
+	prev := dat[0]
+	idx, c := rb.addwithptr(prev)
+	for _, i := range dat[1:] {
+		if highbits(prev) == highbits(i) {
+			c = c.iaddReturnMinimized(lowbits(i))
+			rb.highlowcontainer.setContainerAtIndex(idx, c)
+		} else {
+			idx, c = rb.addwithptr(i)
 		}
-
-		bufPtr := addManyBufferPool.Get().(*[]uint32)
-		buf := *bufPtr
-		copy(buf[:chunkLen], dat[offset:offset+chunkLen])
-		chunk := buf[:chunkLen]
-		slices.Sort(chunk)
-
-		i := 0
-		for i < len(chunk) {
-			hb := highbits(chunk[i])
-			j := i + 1
-			for j < len(chunk) && highbits(chunk[j]) == hb {
-				j++
-			}
-			group := chunk[i:j]
-
-			capSize := len(group)
-			if capSize > 65536 {
-				capSize = 65536
-			}
-			lows := make([]uint16, 0, capSize)
-			prevLow := lowbits(group[0])
-			lows = append(lows, prevLow)
-			for k := 1; k < len(group); k++ {
-				currLow := lowbits(group[k])
-				if currLow != prevLow {
-					lows = append(lows, currLow)
-					prevLow = currLow
-				}
-			}
-
-			var tempC container
-			if len(lows) > arrayDefaultMaxSize {
-				tempAC := &arrayContainer{content: lows}
-				tempC = tempAC.toBitmapContainer()
-			} else {
-				if cap(lows) > len(lows)+64 {
-					perfectLows := make([]uint16, len(lows))
-					copy(perfectLows, lows)
-					tempC = &arrayContainer{content: perfectLows}
-				} else {
-					tempC = &arrayContainer{content: lows}
-				}
-			}
-
-			ra := &rb.highlowcontainer
-			pos := ra.getIndex(hb)
-			if pos >= 0 {
-				c := ra.getUnionedWritableContainer(pos, tempC)
-				ra.setContainerAtIndex(pos, c)
-			} else {
-				ra.insertNewKeyValueAt(-pos-1, hb, tempC)
-			}
-
-			i = j
-		}
-
-		addManyBufferPool.Put(bufPtr)
+		prev = i
 	}
 }
 
