@@ -7,7 +7,7 @@ import (
 
 func BenchmarkAddManySorted(b *testing.B) {
 	rng := rand.New(rand.NewSource(42))
-	size := 50000
+	size := 250000
 	dat := make([]uint32, size)
 	val := uint32(0)
 	for i := 0; i < size; i++ {
@@ -28,7 +28,7 @@ func BenchmarkAddManySorted(b *testing.B) {
 
 func BenchmarkAddManyUnsorted(b *testing.B) {
 	rng := rand.New(rand.NewSource(42))
-	size := 50000
+	size := 250000
 	dat := make([]uint32, size)
 	val := uint32(0)
 	for i := 0; i < size; i++ {
