@@ -1928,9 +1928,12 @@ main:
 	return answer
 }
 
+const addManyChunkSize = 65536
+
 var addManyBufferPool = sync.Pool{
 	New: func() interface{} {
-		return new([]uint32)
+		buf := make([]uint32, addManyChunkSize)
+		return &buf
 	},
 }
 
@@ -1940,67 +1943,122 @@ func (rb *Bitmap) AddMany(dat []uint32) {
 		return
 	}
 
-	var sortedDat []uint32
-	var poolBufPtr *[]uint32
-
 	if slices.IsSorted(dat) {
-		sortedDat = dat
-	} else {
-		poolBufPtr = addManyBufferPool.Get().(*[]uint32)
-		buf := *poolBufPtr
-		if cap(buf) < len(dat) {
-			buf = make([]uint32, len(dat))
-		} else {
-			buf = buf[:len(dat)]
-		}
-		copy(buf, dat)
-		sortedDat = buf
-		slices.Sort(sortedDat)
-	}
-
-	i := 0
-	for i < len(sortedDat) {
-		hb := highbits(sortedDat[i])
-		j := i + 1
-		for j < len(sortedDat) && highbits(sortedDat[j]) == hb {
-			j++
-		}
-		group := sortedDat[i:j]
-
-		lows := make([]uint16, 0, len(group))
-		prevLow := lowbits(group[0])
-		lows = append(lows, prevLow)
-		for k := 1; k < len(group); k++ {
-			currLow := lowbits(group[k])
-			if currLow != prevLow {
-				lows = append(lows, currLow)
-				prevLow = currLow
+		i := 0
+		for i < len(dat) {
+			hb := highbits(dat[i])
+			j := i + 1
+			for j < len(dat) && highbits(dat[j]) == hb {
+				j++
 			}
-		}
+			group := dat[i:j]
 
-		var tempC container
-		if len(lows) > arrayDefaultMaxSize {
-			tempAC := &arrayContainer{content: lows}
-			tempC = tempAC.toBitmapContainer()
-		} else {
-			tempC = &arrayContainer{content: lows}
-		}
+			capSize := len(group)
+			if capSize > 65536 {
+				capSize = 65536
+			}
+			lows := make([]uint16, 0, capSize)
+			prevLow := lowbits(group[0])
+			lows = append(lows, prevLow)
+			for k := 1; k < len(group); k++ {
+				currLow := lowbits(group[k])
+				if currLow != prevLow {
+					lows = append(lows, currLow)
+					prevLow = currLow
+				}
+			}
 
-		ra := &rb.highlowcontainer
-		pos := ra.getIndex(hb)
-		if pos >= 0 {
-			c := ra.getUnionedWritableContainer(pos, tempC)
-			ra.setContainerAtIndex(pos, c)
-		} else {
-			ra.insertNewKeyValueAt(-pos-1, hb, tempC)
-		}
+			var tempC container
+			if len(lows) > arrayDefaultMaxSize {
+				tempAC := &arrayContainer{content: lows}
+				tempC = tempAC.toBitmapContainer()
+			} else {
+				if cap(lows) > len(lows)+64 {
+					perfectLows := make([]uint16, len(lows))
+					copy(perfectLows, lows)
+					tempC = &arrayContainer{content: perfectLows}
+				} else {
+					tempC = &arrayContainer{content: lows}
+				}
+			}
 
-		i = j
+			ra := &rb.highlowcontainer
+			pos := ra.getIndex(hb)
+			if pos >= 0 {
+				c := ra.getUnionedWritableContainer(pos, tempC)
+				ra.setContainerAtIndex(pos, c)
+			} else {
+				ra.insertNewKeyValueAt(-pos-1, hb, tempC)
+			}
+
+			i = j
+		}
+		return
 	}
 
-	if poolBufPtr != nil {
-		*poolBufPtr = sortedDat
-		addManyBufferPool.Put(poolBufPtr)
+	for offset := 0; offset < len(dat); offset += addManyChunkSize {
+		chunkLen := len(dat) - offset
+		if chunkLen > addManyChunkSize {
+			chunkLen = addManyChunkSize
+		}
+
+		bufPtr := addManyBufferPool.Get().(*[]uint32)
+		buf := *bufPtr
+		copy(buf[:chunkLen], dat[offset:offset+chunkLen])
+		chunk := buf[:chunkLen]
+		slices.Sort(chunk)
+
+		i := 0
+		for i < len(chunk) {
+			hb := highbits(chunk[i])
+			j := i + 1
+			for j < len(chunk) && highbits(chunk[j]) == hb {
+				j++
+			}
+			group := chunk[i:j]
+
+			capSize := len(group)
+			if capSize > 65536 {
+				capSize = 65536
+			}
+			lows := make([]uint16, 0, capSize)
+			prevLow := lowbits(group[0])
+			lows = append(lows, prevLow)
+			for k := 1; k < len(group); k++ {
+				currLow := lowbits(group[k])
+				if currLow != prevLow {
+					lows = append(lows, currLow)
+					prevLow = currLow
+				}
+			}
+
+			var tempC container
+			if len(lows) > arrayDefaultMaxSize {
+				tempAC := &arrayContainer{content: lows}
+				tempC = tempAC.toBitmapContainer()
+			} else {
+				if cap(lows) > len(lows)+64 {
+					perfectLows := make([]uint16, len(lows))
+					copy(perfectLows, lows)
+					tempC = &arrayContainer{content: perfectLows}
+				} else {
+					tempC = &arrayContainer{content: lows}
+				}
+			}
+
+			ra := &rb.highlowcontainer
+			pos := ra.getIndex(hb)
+			if pos >= 0 {
+				c := ra.getUnionedWritableContainer(pos, tempC)
+				ra.setContainerAtIndex(pos, c)
+			} else {
+				ra.insertNewKeyValueAt(-pos-1, hb, tempC)
+			}
+
+			i = j
+		}
+
+		addManyBufferPool.Put(bufPtr)
 	}
 }
 
