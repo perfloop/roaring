@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"math/bits"
+	"slices"
 	"strconv"
 
 	"github.com/RoaringBitmap/roaring/v2/internal"
@@ -1931,16 +1932,67 @@ func (rb *Bitmap) AddMany(dat []uint32) {
 	if len(dat) == 0 {
 		return
 	}
-	prev := dat[0]
-	idx, c := rb.addwithptr(prev)
-	for _, i := range dat[1:] {
-		if highbits(prev) == highbits(i) {
-			c = c.iaddReturnMinimized(lowbits(i))
-			rb.highlowcontainer.setContainerAtIndex(idx, c)
-		} else {
-			idx, c = rb.addwithptr(i)
+	if len(dat) < 4 {
+		prev := dat[0]
+		idx, c := rb.addwithptr(prev)
+		for _, i := range dat[1:] {
+			if highbits(prev) == highbits(i) {
+				c = c.iaddReturnMinimized(lowbits(i))
+				rb.highlowcontainer.setContainerAtIndex(idx, c)
+			} else {
+				idx, c = rb.addwithptr(i)
+			}
+			prev = i
 		}
-		prev = i
+		return
+	}
+
+	var sortedDat []uint32
+	if slices.IsSorted(dat) {
+		sortedDat = dat
+	} else {
+		sortedDat = slices.Clone(dat)
+		slices.Sort(sortedDat)
+	}
+
+	i := 0
+	for i < len(sortedDat) {
+		hb := highbits(sortedDat[i])
+		j := i + 1
+		for j < len(sortedDat) && highbits(sortedDat[j]) == hb {
+			j++
+		}
+		group := sortedDat[i:j]
+
+		lows := make([]uint16, 0, len(group))
+		prevLow := lowbits(group[0])
+		lows = append(lows, prevLow)
+		for k := 1; k < len(group); k++ {
+			currLow := lowbits(group[k])
+			if currLow != prevLow {
+				lows = append(lows, currLow)
+				prevLow = currLow
+			}
+		}
+
+		var tempC container
+		if len(lows) > arrayDefaultMaxSize {
+			tempAC := &arrayContainer{content: lows}
+			tempC = tempAC.toBitmapContainer()
+		} else {
+			tempC = &arrayContainer{content: lows}
+		}
+
+		ra := &rb.highlowcontainer
+		pos := ra.getIndex(hb)
+		if pos >= 0 {
+			c := ra.getUnionedWritableContainer(pos, tempC)
+			ra.setContainerAtIndex(pos, c)
+		} else {
+			ra.insertNewKeyValueAt(-pos-1, hb, tempC)
+		}
+
+		i = j
 	}
 }
 
