@@ -13,6 +13,7 @@ import (
 	"math/bits"
 	"slices"
 	"strconv"
+	"sync"
 
 	"github.com/RoaringBitmap/roaring/v2/internal"
 	"github.com/bits-and-blooms/bitset"
@@ -1927,31 +1928,33 @@ main:
 	return answer
 }
 
+var addManyBufferPool = sync.Pool{
+	New: func() interface{} {
+		return new([]uint32)
+	},
+}
+
 // AddMany add all of the values in dat
 func (rb *Bitmap) AddMany(dat []uint32) {
 	if len(dat) == 0 {
 		return
 	}
-	if len(dat) < 4 {
-		prev := dat[0]
-		idx, c := rb.addwithptr(prev)
-		for _, i := range dat[1:] {
-			if highbits(prev) == highbits(i) {
-				c = c.iaddReturnMinimized(lowbits(i))
-				rb.highlowcontainer.setContainerAtIndex(idx, c)
-			} else {
-				idx, c = rb.addwithptr(i)
-			}
-			prev = i
-		}
-		return
-	}
 
 	var sortedDat []uint32
+	var poolBufPtr *[]uint32
+
 	if slices.IsSorted(dat) {
 		sortedDat = dat
 	} else {
-		sortedDat = slices.Clone(dat)
+		poolBufPtr = addManyBufferPool.Get().(*[]uint32)
+		buf := *poolBufPtr
+		if cap(buf) < len(dat) {
+			buf = make([]uint32, len(dat))
+		} else {
+			buf = buf[:len(dat)]
+		}
+		copy(buf, dat)
+		sortedDat = buf
 		slices.Sort(sortedDat)
 	}
 
@@ -1993,6 +1996,11 @@ func (rb *Bitmap) AddMany(dat []uint32) {
 		}
 
 		i = j
+	}
+
+	if poolBufPtr != nil {
+		*poolBufPtr = sortedDat
+		addManyBufferPool.Put(poolBufPtr)
 	}
 }
 
