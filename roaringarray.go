@@ -648,6 +648,37 @@ func (ra *roaringArray) readFrom(stream internal.ByteInput, cookieHeader ...byte
 		ra.needCopyOnWrite = make([]bool, size)
 	}
 
+	// Count container types
+	var runContainersCount, bitmapContainersCount, arrayContainersCount int
+	for i := uint32(0); i < size; i++ {
+		if isRunBitmap != nil && isRunBitmap[i/8]&(1<<(i%8)) != 0 {
+			runContainersCount++
+		} else {
+			card := int(keycard[2*i+1]) + 1
+			if card > arrayDefaultMaxSize {
+				bitmapContainersCount++
+			} else {
+				arrayContainersCount++
+			}
+		}
+	}
+
+	// Pre-allocate contiguous batch slices
+	var runContainers []runContainer16
+	var bitmapContainers []bitmapContainer
+	var arrayContainers []arrayContainer
+	if runContainersCount > 0 {
+		runContainers = make([]runContainer16, runContainersCount)
+	}
+	if bitmapContainersCount > 0 {
+		bitmapContainers = make([]bitmapContainer, bitmapContainersCount)
+	}
+	if arrayContainersCount > 0 {
+		arrayContainers = make([]arrayContainer, arrayContainersCount)
+	}
+
+	var runIdx, bitmapIdx, arrayIdx int
+
 	for i := uint32(0); i < size; i++ {
 		key := keycard[2*i]
 		card := int(keycard[2*i+1]) + 1
@@ -666,11 +697,12 @@ func (ra *roaringArray) readFrom(stream internal.ByteInput, cookieHeader ...byte
 				return stream.GetReadBytes(), fmt.Errorf("failed to read runtime container content: %s", err)
 			}
 
-			nb := runContainer16{
+			runContainers[runIdx] = runContainer16{
 				iv: byteSliceAsInterval16Slice(buf),
 			}
 
-			ra.containers[i] = &nb
+			ra.containers[i] = &runContainers[runIdx]
+			runIdx++
 		} else if card > arrayDefaultMaxSize {
 			// bitmap container
 			buf, err := stream.Next(arrayDefaultMaxSize * 2)
@@ -678,12 +710,13 @@ func (ra *roaringArray) readFrom(stream internal.ByteInput, cookieHeader ...byte
 				return stream.GetReadBytes(), fmt.Errorf("failed to read bitmap container: %s", err)
 			}
 
-			nb := bitmapContainer{
+			bitmapContainers[bitmapIdx] = bitmapContainer{
 				cardinality: card,
 				bitmap:      byteSliceAsUint64Slice(buf),
 			}
 
-			ra.containers[i] = &nb
+			ra.containers[i] = &bitmapContainers[bitmapIdx]
+			bitmapIdx++
 		} else {
 			// array container
 			buf, err := stream.Next(card * 2)
@@ -691,11 +724,12 @@ func (ra *roaringArray) readFrom(stream internal.ByteInput, cookieHeader ...byte
 				return stream.GetReadBytes(), fmt.Errorf("failed to read array container: %s", err)
 			}
 
-			nb := arrayContainer{
+			arrayContainers[arrayIdx] = arrayContainer{
 				byteSliceAsUint16Slice(buf),
 			}
 
-			ra.containers[i] = &nb
+			ra.containers[i] = &arrayContainers[arrayIdx]
+			arrayIdx++
 		}
 	}
 
