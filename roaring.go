@@ -14,6 +14,7 @@ import (
 	"math/bits"
 	"strconv"
 	"sync"
+	"unsafe"
 
 	"github.com/RoaringBitmap/roaring/v2/internal"
 	"github.com/bits-and-blooms/bitset"
@@ -489,22 +490,57 @@ func readBitmapBytes(r io.Reader, cookieHeader ...byte) ([]byte, error) {
 	return finalBuf, nil
 }
 
+type bytesReaderLayout struct {
+	s []byte
+}
+
+func tryGetUnreadBytes(reader io.Reader) []byte {
+	if bytesReader, ok := reader.(*bytes.Reader); ok {
+		rPrivate := (*bytesReaderLayout)(unsafe.Pointer(bytesReader))
+		underlyingSlice := rPrivate.s
+		unreadLen := bytesReader.Len()
+		return underlyingSlice[len(underlyingSlice)-unreadLen:]
+	}
+	return nil
+}
+
+func advanceReader(reader io.Reader, p int) {
+	if bytesReader, ok := reader.(*bytes.Reader); ok {
+		_, _ = bytesReader.Seek(int64(p), io.SeekCurrent)
+	}
+}
+
 func (rb *Bitmap) ReadFrom(reader io.Reader, cookieHeader ...byte) (p int64, err error) {
 	stream, ok := reader.(internal.ByteInput)
+	isPooledBuffer := false
+	isDirectBuffer := false
 	if !ok {
-		finalBuf, err := readBitmapBytes(reader, cookieHeader...)
-		if err != nil {
-			return 0, err
+		if unreadBytes := tryGetUnreadBytes(reader); unreadBytes != nil {
+			byteBuffer := internal.ByteBufferPool.Get().(*internal.ByteBuffer)
+			byteBuffer.Reset(unreadBytes)
+			stream = byteBuffer
+			isPooledBuffer = true
+			isDirectBuffer = true
+		} else {
+			finalBuf, err := readBitmapBytes(reader, cookieHeader...)
+			if err != nil {
+				return 0, err
+			}
+			byteBuffer := internal.ByteBufferPool.Get().(*internal.ByteBuffer)
+			byteBuffer.Reset(finalBuf)
+			stream = byteBuffer
+			isPooledBuffer = true
+			cookieHeader = nil
 		}
-		byteBuffer := internal.ByteBufferPool.Get().(*internal.ByteBuffer)
-		byteBuffer.Reset(finalBuf)
-		stream = byteBuffer
-		cookieHeader = nil
 	}
 
 	p, err = rb.highlowcontainer.readFrom(stream, cookieHeader...)
 
-	if !ok {
+	if isDirectBuffer && err == nil {
+		advanceReader(reader, int(p))
+	}
+
+	if isPooledBuffer {
 		internal.ByteBufferPool.Put(stream.(*internal.ByteBuffer))
 	}
 	return
