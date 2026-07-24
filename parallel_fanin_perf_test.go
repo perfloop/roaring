@@ -3,13 +3,15 @@ package roaring
 import "testing"
 
 const (
-	parOrHighFanInInputCount  = 32
-	parOrHighFanInKeyCount    = 2
-	parOrHighFanInParallelism = 4
+	parOrHighFanInInputCount     = 512
+	parOrHighFanInKeyCount       = 1
+	parOrMixedFallbackInputCount = 64
+	parOrMixedFallbackKeyCount   = 4
+	parOrHighFanInParallelism    = 4
 )
 
-// newParOrHighFanInBitmapInputs makes 32 bitmap-backed inputs sharing two
-// adjacent high keys. Each input contributes one of four disjoint bit phases,
+// newParOrHighFanInBitmapInputs makes 512 bitmap-backed inputs sharing one
+// high key. Each input contributes one of four disjoint bit phases,
 // so the known union remains dense without becoming a full run container.
 func newParOrHighFanInBitmapInputs() ([]*Bitmap, *Bitmap) {
 	inputs := make([]*Bitmap, parOrHighFanInInputCount)
@@ -38,12 +40,10 @@ func newParOrHighFanInBitmapInputs() ([]*Bitmap, *Bitmap) {
 }
 
 func newParOrMixedFallbackInputs() ([]*Bitmap, *Bitmap) {
-	const inputCount = 12
-
-	inputs := make([]*Bitmap, inputCount)
+	inputs := make([]*Bitmap, parOrMixedFallbackInputCount)
 	for input := range inputs {
 		bitmap := NewBitmap()
-		for key := uint32(0); key < parOrHighFanInKeyCount; key++ {
+		for key := uint32(0); key < parOrMixedFallbackKeyCount; key++ {
 			base := key << 16
 			switch input % 3 {
 			case 0:
