@@ -629,41 +629,7 @@ func (ra *roaringArray) readFrom(stream internal.ByteInput, cookieHeader ...byte
 		}
 	}
 
-	// Count container types
-	var runCount, bitmapCount, arrayCount, totalArrayBytes int
-	for i := uint32(0); i < size; i++ {
-		if isRunBitmap != nil && isRunBitmap[i/8]&(1<<(i%8)) != 0 {
-			runCount++
-		} else {
-			card := int(keycard[2*i+1]) + 1
-			if card > arrayDefaultMaxSize {
-				bitmapCount++
-			} else {
-				arrayCount++
-				totalArrayBytes += card * 2
-			}
-		}
-	}
-
-	var (
-		preallocated bool
-		arrConts     []arrayContainer
-		btmConts     []bitmapContainer
-		runConts     []runContainer16
-	)
-
 	if size <= 128 {
-		if runCount > 0 {
-			runConts = make([]runContainer16, runCount)
-		}
-		if bitmapCount > 0 {
-			btmConts = make([]bitmapContainer, bitmapCount)
-		}
-		if arrayCount > 0 {
-			arrConts = make([]arrayContainer, arrayCount)
-		}
-		preallocated = true
-
 		alloc := new(metadataAlloc128)
 		ra.containers = alloc.containers[:size]
 		ra.keys = alloc.keys[:size]
@@ -689,8 +655,6 @@ func (ra *roaringArray) readFrom(stream internal.ByteInput, cookieHeader ...byte
 		}
 	}
 
-	var arrayIdx, bitmapIdx, runIdx int
-
 	for i := uint32(0); i < size; i++ {
 		key := keycard[2*i]
 		card := int(keycard[2*i+1]) + 1
@@ -704,83 +668,34 @@ func (ra *roaringArray) readFrom(stream internal.ByteInput, cookieHeader ...byte
 				return 0, fmt.Errorf("failed to read runtime container size: %s", err)
 			}
 
-			needed := int(nr) * 4
-			buf, err := stream.Next(needed)
+			buf, err := stream.Next(int(nr) * 4)
 			if err != nil {
 				return stream.GetReadBytes(), fmt.Errorf("failed to read runtime container content: %s", err)
 			}
 
-			var bufCopy []byte
-			if willNeedCopyOnWrite {
-				bufCopy = make([]byte, needed)
-				copy(bufCopy, buf)
-			} else {
-				bufCopy = buf
-			}
-
-			if preallocated {
-				rc := &runConts[runIdx]
-				runIdx++
-				rc.iv = byteSliceAsInterval16Slice(bufCopy)
-				ra.containers[i] = rc
-			} else {
-				ra.containers[i] = &runContainer16{
-					iv: byteSliceAsInterval16Slice(bufCopy),
-				}
+			ra.containers[i] = &runContainer16{
+				iv: byteSliceAsInterval16Slice(buf),
 			}
 		} else if card > arrayDefaultMaxSize {
 			// bitmap container
-			needed := arrayDefaultMaxSize * 2
-			buf, err := stream.Next(needed)
+			buf, err := stream.Next(arrayDefaultMaxSize * 2)
 			if err != nil {
 				return stream.GetReadBytes(), fmt.Errorf("failed to read bitmap container: %s", err)
 			}
 
-			var bufCopy []byte
-			if willNeedCopyOnWrite {
-				bufCopy = make([]byte, needed)
-				copy(bufCopy, buf)
-			} else {
-				bufCopy = buf
-			}
-
-			if preallocated {
-				bc := &btmConts[bitmapIdx]
-				bitmapIdx++
-				bc.cardinality = card
-				bc.bitmap = byteSliceAsUint64Slice(bufCopy)
-				ra.containers[i] = bc
-			} else {
-				ra.containers[i] = &bitmapContainer{
-					cardinality: card,
-					bitmap:      byteSliceAsUint64Slice(bufCopy),
-				}
+			ra.containers[i] = &bitmapContainer{
+				cardinality: card,
+				bitmap:      byteSliceAsUint64Slice(buf),
 			}
 		} else {
 			// array container
-			needed := card * 2
-			buf, err := stream.Next(needed)
+			buf, err := stream.Next(card * 2)
 			if err != nil {
 				return stream.GetReadBytes(), fmt.Errorf("failed to read array container: %s", err)
 			}
 
-			var bufCopy []byte
-			if willNeedCopyOnWrite {
-				bufCopy = make([]byte, needed)
-				copy(bufCopy, buf)
-			} else {
-				bufCopy = buf
-			}
-
-			if preallocated {
-				ac := &arrConts[arrayIdx]
-				arrayIdx++
-				ac.content = byteSliceAsUint16Slice(bufCopy)
-				ra.containers[i] = ac
-			} else {
-				ra.containers[i] = &arrayContainer{
-					content: byteSliceAsUint16Slice(bufCopy),
-				}
+			ra.containers[i] = &arrayContainer{
+				content: byteSliceAsUint16Slice(buf),
 			}
 		}
 	}

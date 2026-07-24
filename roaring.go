@@ -333,27 +333,6 @@ func (rb *Bitmap) FromUnsafeBytes(data []byte, cookieHeader ...byte) (p int64, e
 func (rb *Bitmap) ReadFrom(reader io.Reader, cookieHeader ...byte) (p int64, err error) {
 	stream, ok := reader.(internal.ByteInput)
 	if !ok {
-		if bytesReader, ok := reader.(*bytes.Reader); ok {
-			unreadLen := bytesReader.Len()
-			buf := make([]byte, unreadLen)
-
-			if _, err := io.ReadFull(bytesReader, buf); err != nil {
-				return 0, err
-			}
-			originalPos, _ := bytesReader.Seek(0, io.SeekCurrent)
-			startPos := originalPos - int64(unreadLen)
-
-			byteBuffer := internal.ByteBufferPool.Get().(*internal.ByteBuffer)
-			byteBuffer.Reset(buf)
-			stream = byteBuffer
-
-			p, err = rb.highlowcontainer.readFrom(stream, cookieHeader...)
-
-			_, _ = bytesReader.Seek(startPos+p, io.SeekStart)
-			internal.ByteBufferPool.Put(byteBuffer)
-			return p, err
-		}
-
 		byteInputAdapter := internal.ByteInputAdapterPool.Get().(*internal.ByteInputAdapter)
 		byteInputAdapter.Reset(reader)
 		stream = byteInputAdapter

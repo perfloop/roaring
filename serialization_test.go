@@ -813,13 +813,15 @@ func TestReadFromBytesReader_HeapRetention(t *testing.T) {
 	// Warm up GC
 	_ = getHeapAlloc()
 
-	// Perform deserialization in a closure so the bitmap is discarded
+	var fullAlloc uint64
 	var containerKeep container
 	func() {
 		reader := bytes.NewReader(serializedBytes)
 		nb := New()
 		_, err := nb.ReadFrom(reader)
 		require.NoError(t, err)
+
+		fullAlloc = getHeapAlloc()
 
 		// Access and keep only a single container
 		containerKeep = nb.highlowcontainer.getContainerAtIndex(0)
@@ -833,5 +835,8 @@ func TestReadFromBytesReader_HeapRetention(t *testing.T) {
 	runtime.KeepAlive(containerKeep)
 
 	// Since we discarded the rest of the bitmap, the heap retention should be minimal.
-	_ = allocAfterDiscarding
+	// The fullAlloc is typically >250KB, while allocAfterDiscarding should be much smaller (e.g., <100KB)
+	// and definitely less than fullAlloc.
+	assert.Less(t, allocAfterDiscarding, fullAlloc)
+	assert.Less(t, allocAfterDiscarding, uint64(500000))
 }
