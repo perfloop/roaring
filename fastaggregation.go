@@ -183,26 +183,190 @@ func HeapOr(bitmaps ...*Bitmap) *Bitmap {
 	return heap.Pop(&pq).(*item).value
 }
 
+type heapXorKeyIterator struct {
+	array *roaringArray
+	pos   int
+}
+
+type heapXorItem struct {
+	key      uint16
+	iterator *heapXorKeyIterator
+}
+
+func heapXorHeapify(items []heapXorItem, index int) {
+	item := items[index]
+	for {
+		child := 2*index + 1
+		if child >= len(items) {
+			break
+		}
+		if child+1 < len(items) && items[child+1].key < items[child].key {
+			child++
+		}
+		if item.key <= items[child].key {
+			break
+		}
+		items[index] = items[child]
+		index = child
+	}
+	items[index] = item
+}
+
+func heapXorMergeContainers(matching []container) container {
+	allArrays := true
+	for _, current := range matching {
+		if _, ok := current.(*arrayContainer); !ok {
+			allArrays = false
+			break
+		}
+	}
+	if allArrays {
+		return heapXorArrayContainers(matching)
+	}
+
+	result := matching[0].clone()
+	for _, next := range matching[1:] {
+		if _, nextIsBitmap := next.(*bitmapContainer); nextIsBitmap {
+			if _, resultIsBitmap := result.(*bitmapContainer); !resultIsBitmap {
+				switch current := result.(type) {
+				case *arrayContainer:
+					result = current.toBitmapContainer()
+				case *runContainer16:
+					result = current.toBitmapContainer()
+				}
+			}
+		}
+		result = result.ixor(next)
+	}
+	return result
+}
+
+func heapXorArrayContainers(matching []container) container {
+	first := matching[0].(*arrayContainer)
+	var bufferA [arrayDefaultMaxSize]uint16
+	var bufferB [arrayDefaultMaxSize]uint16
+	current := bufferA[:len(first.content)]
+	copy(current, first.content)
+	useA := true
+
+	for index := 1; index < len(matching); index++ {
+		next := matching[index].(*arrayContainer)
+		if len(current)+len(next.content) > arrayDefaultMaxSize {
+			bitmap := newBitmapContainer()
+			for _, value := range current {
+				bitmap.bitmap[uint(value)>>6] ^= uint64(1) << (value % 64)
+			}
+			bitmap.cardinality = len(current)
+			result := container(bitmap).ixor(next)
+			for _, remaining := range matching[index+1:] {
+				result = result.ixor(remaining)
+			}
+			return result
+		}
+
+		var destination []uint16
+		if useA {
+			destination = bufferB[:]
+		} else {
+			destination = bufferA[:]
+		}
+		count := exclusiveUnion2by2(current, next.content, destination)
+		current = destination[:count]
+		useA = !useA
+	}
+
+	result := newArrayContainerSize(len(current))
+	copy(result.content, current)
+	return result
+}
+
 // HeapXor computes the symmetric difference between many bitmaps quickly (as opposed to calling Xor repeated).
-// Internally, this function uses a heap.
-// It might be faster than calling Xor repeatedly.
+// It merges the sorted high keys of all inputs and only materializes final result containers.
 func HeapXor(bitmaps ...*Bitmap) *Bitmap {
-	if len(bitmaps) == 0 {
+	switch len(bitmaps) {
+	case 0:
+		return NewBitmap()
+	case 1:
+		return bitmaps[0]
+	case 2:
+		return Xor(bitmaps[0], bitmaps[1])
+	}
+
+	nonEmptyCount := 0
+	for _, bitmap := range bitmaps {
+		if bitmap != nil && bitmap.highlowcontainer.size() > 0 {
+			nonEmptyCount++
+		}
+	}
+	if nonEmptyCount == 0 {
 		return NewBitmap()
 	}
-
-	pq := make(priorityQueue, len(bitmaps))
-	for i, bm := range bitmaps {
-		pq[i] = &item{bm, i}
+	if nonEmptyCount == 1 {
+		for _, bitmap := range bitmaps {
+			if bitmap != nil && bitmap.highlowcontainer.size() > 0 {
+				return bitmap.Clone()
+			}
+		}
 	}
-	heap.Init(&pq)
 
-	for pq.Len() > 1 {
-		x1 := heap.Pop(&pq).(*item)
-		x2 := heap.Pop(&pq).(*item)
-		heap.Push(&pq, &item{Xor(x1.value, x2.value), 0})
+	iterators := make([]heapXorKeyIterator, 0, nonEmptyCount)
+	for _, bitmap := range bitmaps {
+		if bitmap != nil && bitmap.highlowcontainer.size() > 0 {
+			iterators = append(iterators, heapXorKeyIterator{array: &bitmap.highlowcontainer})
+		}
 	}
-	return heap.Pop(&pq).(*item).value
+
+	items := make([]heapXorItem, 0, len(iterators))
+	for index := range iterators {
+		items = append(items, heapXorItem{
+			key:      iterators[index].array.keys[0],
+			iterator: &iterators[index],
+		})
+	}
+	for index := len(items)/2 - 1; index >= 0; index-- {
+		heapXorHeapify(items, index)
+	}
+
+	answer := NewBitmap()
+	matching := make([]container, 0, len(items))
+	for len(items) > 0 {
+		key := items[0].key
+		matching = matching[:0]
+		var source *roaringArray
+		sourceIndex := 0
+
+		for len(items) > 0 && items[0].key == key {
+			item := &items[0]
+			iterator := item.iterator
+			if len(matching) == 0 {
+				source = iterator.array
+				sourceIndex = iterator.pos
+			}
+			matching = append(matching, iterator.array.containers[iterator.pos])
+
+			iterator.pos++
+			if iterator.pos < len(iterator.array.keys) {
+				item.key = iterator.array.keys[iterator.pos]
+				heapXorHeapify(items, 0)
+			} else {
+				items[0] = items[len(items)-1]
+				items = items[:len(items)-1]
+				if len(items) > 0 {
+					heapXorHeapify(items, 0)
+				}
+			}
+		}
+
+		if len(matching) == 1 {
+			answer.highlowcontainer.appendCopy(*source, sourceIndex)
+			continue
+		}
+		result := heapXorMergeContainers(matching)
+		if !result.isEmpty() {
+			answer.highlowcontainer.appendContainer(key, result, false)
+		}
+	}
+	return answer
 }
 
 // AndAny provides a result equivalent to x1.And(FastOr(bitmaps)).

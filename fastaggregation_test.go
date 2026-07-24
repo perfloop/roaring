@@ -265,3 +265,42 @@ func TestFastAggregationsAndAny(t *testing.T) {
 
 	assert.True(t, fast.Equals(orFirst))
 }
+
+func TestHeapXorHeterogeneousContainers(t *testing.T) {
+	array := BitmapOf(1, 7, 31)
+
+	run := NewBitmap()
+	for value := uint32(100); value < 1100; value++ {
+		run.Add(value)
+	}
+	run.RunOptimize()
+
+	bitmap := NewBitmap()
+	for value := uint32(0); value < 5000; value++ {
+		bitmap.Add(20000 + value*5)
+	}
+
+	assert.IsType(t, &arrayContainer{}, array.highlowcontainer.containers[0])
+	assert.IsType(t, &runContainer16{}, run.highlowcontainer.containers[0])
+	assert.IsType(t, &bitmapContainer{}, bitmap.highlowcontainer.containers[0])
+
+	for name, inputs := range map[string][]*Bitmap{
+		"array-bitmap-empty": {array, bitmap, NewBitmap()},
+		"run-bitmap-empty":   {run, bitmap, NewBitmap()},
+	} {
+		t.Run(name, func(t *testing.T) {
+			before := make([]*Bitmap, len(inputs))
+			for i, input := range inputs {
+				before[i] = input.Clone()
+			}
+
+			expected := Xor(Xor(inputs[0], inputs[1]), inputs[2])
+			actual := HeapXor(inputs...)
+			assert.True(t, actual.Equals(expected))
+			assert.NoError(t, actual.Validate())
+			for i, input := range inputs {
+				assert.True(t, input.Equals(before[i]), "input %d was mutated", i)
+			}
+		})
+	}
+}
