@@ -629,24 +629,96 @@ func (ra *roaringArray) readFrom(stream internal.ByteInput, cookieHeader ...byte
 		}
 	}
 
-	// Allocate slices upfront as number of containers is known
-	if cap(ra.containers) >= int(size) {
-		ra.containers = ra.containers[:size]
-	} else {
-		ra.containers = make([]container, size)
+	// Count container types
+	var runCount, bitmapCount, arrayCount, totalArrayBytes int
+	for i := uint32(0); i < size; i++ {
+		if isRunBitmap != nil && isRunBitmap[i/8]&(1<<(i%8)) != 0 {
+			runCount++
+		} else {
+			card := int(keycard[2*i+1]) + 1
+			if card > arrayDefaultMaxSize {
+				bitmapCount++
+			} else {
+				arrayCount++
+				totalArrayBytes += card * 2
+			}
+		}
 	}
 
-	if cap(ra.keys) >= int(size) {
-		ra.keys = ra.keys[:size]
-	} else {
-		ra.keys = make([]uint16, size)
+	var (
+		preallocated   bool
+		arrConts       []arrayContainer
+		btmConts       []bitmapContainer
+		runConts       []runContainer16
+		runContsBuf    []byte
+		bitmapContsBuf []byte
+		arrayContsBuf  []byte
+	)
+
+	if size <= 128 {
+		if runCount > 0 {
+			runConts = make([]runContainer16, runCount)
+			if willNeedCopyOnWrite {
+				runContsBuf = make([]byte, runCount*4)
+			}
+		}
+		if bitmapCount > 0 {
+			btmConts = make([]bitmapContainer, bitmapCount)
+			if willNeedCopyOnWrite {
+				bitmapContsBuf = make([]byte, bitmapCount*arrayDefaultMaxSize*2)
+			}
+		}
+		if arrayCount > 0 {
+			arrConts = make([]arrayContainer, arrayCount)
+			if willNeedCopyOnWrite {
+				arrayContsBuf = make([]byte, totalArrayBytes)
+			}
+		}
+		preallocated = true
 	}
 
-	if cap(ra.needCopyOnWrite) >= int(size) {
-		ra.needCopyOnWrite = ra.needCopyOnWrite[:size]
+	if size <= 32 {
+		alloc := new(metadataAlloc32)
+		ra.containers = alloc.containers[:size]
+		ra.keys = alloc.keys[:size]
+		ra.needCopyOnWrite = alloc.needCopyOnWrite[:size]
+	} else if size <= 64 {
+		alloc := new(metadataAlloc64)
+		ra.containers = alloc.containers[:size]
+		ra.keys = alloc.keys[:size]
+		ra.needCopyOnWrite = alloc.needCopyOnWrite[:size]
+	} else if size <= 100 {
+		alloc := new(metadataAlloc100)
+		ra.containers = alloc.containers[:size]
+		ra.keys = alloc.keys[:size]
+		ra.needCopyOnWrite = alloc.needCopyOnWrite[:size]
+	} else if size <= 128 {
+		alloc := new(metadataAlloc128)
+		ra.containers = alloc.containers[:size]
+		ra.keys = alloc.keys[:size]
+		ra.needCopyOnWrite = alloc.needCopyOnWrite[:size]
 	} else {
-		ra.needCopyOnWrite = make([]bool, size)
+		// Allocate slices upfront as number of containers is known
+		if cap(ra.containers) >= int(size) {
+			ra.containers = ra.containers[:size]
+		} else {
+			ra.containers = make([]container, size)
+		}
+
+		if cap(ra.keys) >= int(size) {
+			ra.keys = ra.keys[:size]
+		} else {
+			ra.keys = make([]uint16, size)
+		}
+
+		if cap(ra.needCopyOnWrite) >= int(size) {
+			ra.needCopyOnWrite = ra.needCopyOnWrite[:size]
+		} else {
+			ra.needCopyOnWrite = make([]bool, size)
+		}
 	}
+
+	var arrayIdx, bitmapIdx, runIdx int
 
 	for i := uint32(0); i < size; i++ {
 		key := keycard[2*i]
@@ -661,41 +733,100 @@ func (ra *roaringArray) readFrom(stream internal.ByteInput, cookieHeader ...byte
 				return 0, fmt.Errorf("failed to read runtime container size: %s", err)
 			}
 
-			buf, err := stream.Next(int(nr) * 4)
+			needed := int(nr) * 4
+			buf, err := stream.Next(needed)
 			if err != nil {
 				return stream.GetReadBytes(), fmt.Errorf("failed to read runtime container content: %s", err)
 			}
 
-			nb := runContainer16{
-				iv: byteSliceAsInterval16Slice(buf),
+			var bufCopy []byte
+			if willNeedCopyOnWrite {
+				if len(runContsBuf) < needed {
+					allocSize := needed
+					if allocSize < 1024 {
+						allocSize = 1024
+					}
+					runContsBuf = make([]byte, allocSize)
+				}
+				bufCopy = runContsBuf[:needed]
+				runContsBuf = runContsBuf[needed:]
+				copy(bufCopy, buf)
+			} else {
+				bufCopy = buf
 			}
 
-			ra.containers[i] = &nb
+			if preallocated {
+				rc := &runConts[runIdx]
+				runIdx++
+				rc.iv = byteSliceAsInterval16Slice(bufCopy)
+				ra.containers[i] = rc
+			} else {
+				ra.containers[i] = &runContainer16{
+					iv: byteSliceAsInterval16Slice(bufCopy),
+				}
+			}
 		} else if card > arrayDefaultMaxSize {
 			// bitmap container
-			buf, err := stream.Next(arrayDefaultMaxSize * 2)
+			needed := arrayDefaultMaxSize * 2
+			buf, err := stream.Next(needed)
 			if err != nil {
 				return stream.GetReadBytes(), fmt.Errorf("failed to read bitmap container: %s", err)
 			}
 
-			nb := bitmapContainer{
-				cardinality: card,
-				bitmap:      byteSliceAsUint64Slice(buf),
+			var bufCopy []byte
+			if willNeedCopyOnWrite {
+				if len(bitmapContsBuf) < needed {
+					bitmapContsBuf = make([]byte, needed)
+				}
+				bufCopy = bitmapContsBuf[:needed]
+				bitmapContsBuf = bitmapContsBuf[needed:]
+				copy(bufCopy, buf)
+			} else {
+				bufCopy = buf
 			}
 
-			ra.containers[i] = &nb
+			if preallocated {
+				bc := &btmConts[bitmapIdx]
+				bitmapIdx++
+				bc.cardinality = card
+				bc.bitmap = byteSliceAsUint64Slice(bufCopy)
+				ra.containers[i] = bc
+			} else {
+				ra.containers[i] = &bitmapContainer{
+					cardinality: card,
+					bitmap:      byteSliceAsUint64Slice(bufCopy),
+				}
+			}
 		} else {
 			// array container
-			buf, err := stream.Next(card * 2)
+			needed := card * 2
+			buf, err := stream.Next(needed)
 			if err != nil {
 				return stream.GetReadBytes(), fmt.Errorf("failed to read array container: %s", err)
 			}
 
-			nb := arrayContainer{
-				byteSliceAsUint16Slice(buf),
+			var bufCopy []byte
+			if willNeedCopyOnWrite {
+				if len(arrayContsBuf) < needed {
+					arrayContsBuf = make([]byte, needed)
+				}
+				bufCopy = arrayContsBuf[:needed]
+				arrayContsBuf = arrayContsBuf[needed:]
+				copy(bufCopy, buf)
+			} else {
+				bufCopy = buf
 			}
 
-			ra.containers[i] = &nb
+			if preallocated {
+				ac := &arrConts[arrayIdx]
+				arrayIdx++
+				ac.content = byteSliceAsUint16Slice(bufCopy)
+				ra.containers[i] = ac
+			} else {
+				ra.containers[i] = &arrayContainer{
+					content: byteSliceAsUint16Slice(bufCopy),
+				}
+			}
 		}
 	}
 
@@ -825,3 +956,29 @@ func (ra *roaringArray) validate() error {
 
 	return nil
 }
+
+type metadataAlloc32 struct {
+	containers      [32]container
+	keys            [32]uint16
+	needCopyOnWrite [32]bool
+}
+
+type metadataAlloc64 struct {
+	containers      [64]container
+	keys            [64]uint16
+	needCopyOnWrite [64]bool
+}
+
+type metadataAlloc100 struct {
+	containers      [100]container
+	keys            [100]uint16
+	needCopyOnWrite [100]bool
+}
+
+type metadataAlloc128 struct {
+	containers      [128]container
+	keys            [128]uint16
+	needCopyOnWrite [128]bool
+}
+
+
