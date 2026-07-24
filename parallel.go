@@ -141,6 +141,10 @@ func toBitmapContainer(c container) container {
 	return c
 }
 
+// multiwayBitmapOrMinInputs is the measured fan-in where the accumulator's
+// fixed full-container passes are amortized. Smaller unions retain FastOr.
+const multiwayBitmapOrMinInputs = 512
+
 // multiwayBitmapOr reduces one shared bitmap container into a fresh output
 // container. It only accepts the dense single-key shape so ParOr can retain
 // its existing generic implementation for other inputs.
@@ -402,8 +406,10 @@ func ParOr(parallelism int, bitmaps ...*Bitmap) *Bitmap {
 
 	keyRange := int(hKey) - int(lKey) + 1
 	if keyRange == 1 {
-		if result, ok := multiwayBitmapOr(bitmaps); ok {
-			return result
+		if len(bitmaps) >= multiwayBitmapOrMinInputs {
+			if result, ok := multiwayBitmapOr(bitmaps); ok {
+				return result
+			}
 		}
 		return FastOr(bitmaps...)
 	}
