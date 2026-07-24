@@ -8,13 +8,10 @@ package roaring
 import (
 	"bytes"
 	"encoding/base64"
-	"encoding/binary"
 	"fmt"
 	"io"
 	"math/bits"
 	"strconv"
-	"sync"
-	"unsafe"
 
 	"github.com/RoaringBitmap/roaring/v2/internal"
 	"github.com/bits-and-blooms/bitset"
@@ -333,215 +330,38 @@ func (rb *Bitmap) FromUnsafeBytes(data []byte, cookieHeader ...byte) (p int64, e
 // Since io.Reader is regarded as a stream and cannot be read twice,
 // we add cookieHeader to accept the 4-byte data that has been read in roaring64.ReadFrom.
 // It is not necessary to pass cookieHeader when call roaring.ReadFrom to read the roaring32 data directly.
-type readBuffer struct {
-	buf []byte
-	off int
-}
-
-func (rb *readBuffer) grow(n int) {
-	if len(rb.buf)-rb.off < n {
-		newCap := len(rb.buf) * 2
-		if newCap < rb.off+n {
-			newCap = rb.off + n + 65536
-		}
-		newBuf := make([]byte, newCap)
-		copy(newBuf, rb.buf[:rb.off])
-		rb.buf = newBuf
-	}
-}
-
-var readBufferPool = sync.Pool{
-	New: func() interface{} {
-		return &readBuffer{
-			buf: make([]byte, 65536), // 64KB initial size
-			off: 0,
-		}
-	},
-}
-
-func readBitmapBytes(r io.Reader, cookieHeader ...byte) ([]byte, error) {
-	if len(cookieHeader) > 0 && len(cookieHeader) != 4 {
-		return nil, fmt.Errorf("error in roaringArray.readFrom: could not read initial cookie: incorrect size of cookie header")
-	}
-
-	rb := readBufferPool.Get().(*readBuffer)
-	rb.off = 0
-
-	// If cookieHeader is provided, write it to the buffer first
-	if len(cookieHeader) > 0 {
-		rb.grow(len(cookieHeader))
-		copy(rb.buf[rb.off:], cookieHeader)
-		rb.off += len(cookieHeader)
-	}
-
-	// Helper to read exactly n bytes from r into rb
-	readExact := func(n int) ([]byte, error) {
-		rb.grow(n)
-		dest := rb.buf[rb.off : rb.off+n]
-		_, err := io.ReadFull(r, dest)
-		if err != nil {
-			return nil, err
-		}
-		res := rb.buf[rb.off : rb.off+n]
-		rb.off += n
-		return res, nil
-	}
-
-	var cookie uint32
-	if len(cookieHeader) == 4 {
-		cookie = binary.LittleEndian.Uint32(cookieHeader)
-	} else {
-		cookieBytes, err := readExact(4)
-		if err != nil {
-			readBufferPool.Put(rb)
-			return nil, err
-		}
-		cookie = binary.LittleEndian.Uint32(cookieBytes)
-	}
-
-	var size uint32
-	var isRunBitmap []byte
-	var err error
-
-	if cookie&0x0000FFFF == serialCookie {
-		size = cookie>>16 + 1
-		isRunBitmapSize := (int(size) + 7) / 8
-		isRunBitmap, err = readExact(isRunBitmapSize)
-		if err != nil {
-			readBufferPool.Put(rb)
-			return nil, err
-		}
-	} else if cookie == serialCookieNoRunContainer {
-		sizeBytes, err := readExact(4)
-		if err != nil {
-			readBufferPool.Put(rb)
-			return nil, err
-		}
-		size = binary.LittleEndian.Uint32(sizeBytes)
-	} else {
-		readBufferPool.Put(rb)
-		return nil, fmt.Errorf("error in roaringArray.readFrom: did not find expected serialCookie in header")
-	}
-
-	if size > (1 << 16) {
-		readBufferPool.Put(rb)
-		return nil, fmt.Errorf("it is logically impossible to have more than (1<<16) containers")
-	}
-
-	// Read descriptive header
-	descriptiveHeader, err := readExact(2 * 2 * int(size))
-	if err != nil {
-		readBufferPool.Put(rb)
-		return nil, err
-	}
-
-	keycard := byteSliceAsUint16Slice(descriptiveHeader)
-
-	if isRunBitmap == nil || size >= noOffsetThreshold {
-		// Read offset header
-		_, err = readExact(int(size) * 4)
-		if err != nil {
-			readBufferPool.Put(rb)
-			return nil, err
-		}
-	}
-
-	// Read containers
-	for i := uint32(0); i < size; i++ {
-		if isRunBitmap != nil && isRunBitmap[i/8]&(1<<(i%8)) != 0 {
-			// run container
-			nrBytes, err := readExact(2)
-			if err != nil {
-				readBufferPool.Put(rb)
-				return nil, err
-			}
-			nr := binary.LittleEndian.Uint16(nrBytes)
-
-			_, err = readExact(int(nr) * 4)
-			if err != nil {
-				readBufferPool.Put(rb)
-				return nil, err
-			}
-		} else {
-			card := int(keycard[2*i+1]) + 1
-			if card > arrayDefaultMaxSize {
-				// bitmap container
-				_, err = readExact(arrayDefaultMaxSize * 2)
-				if err != nil {
-					readBufferPool.Put(rb)
-					return nil, err
-				}
-			} else {
-				// array container
-				_, err = readExact(card * 2)
-				if err != nil {
-					readBufferPool.Put(rb)
-					return nil, err
-				}
-			}
-		}
-	}
-
-	// Allocate exact sized buffer and copy
-	finalBuf := make([]byte, rb.off)
-	copy(finalBuf, rb.buf[:rb.off])
-
-	readBufferPool.Put(rb)
-	return finalBuf, nil
-}
-
-type bytesReaderLayout struct {
-	s []byte
-}
-
-func tryGetUnreadBytes(reader io.Reader) []byte {
-	if bytesReader, ok := reader.(*bytes.Reader); ok {
-		rPrivate := (*bytesReaderLayout)(unsafe.Pointer(bytesReader))
-		underlyingSlice := rPrivate.s
-		unreadLen := bytesReader.Len()
-		return underlyingSlice[len(underlyingSlice)-unreadLen:]
-	}
-	return nil
-}
-
-func advanceReader(reader io.Reader, p int) {
-	if bytesReader, ok := reader.(*bytes.Reader); ok {
-		_, _ = bytesReader.Seek(int64(p), io.SeekCurrent)
-	}
-}
-
 func (rb *Bitmap) ReadFrom(reader io.Reader, cookieHeader ...byte) (p int64, err error) {
 	stream, ok := reader.(internal.ByteInput)
-	isPooledBuffer := false
-	isDirectBuffer := false
 	if !ok {
-		if unreadBytes := tryGetUnreadBytes(reader); unreadBytes != nil {
-			byteBuffer := internal.ByteBufferPool.Get().(*internal.ByteBuffer)
-			byteBuffer.Reset(unreadBytes)
-			stream = byteBuffer
-			isPooledBuffer = true
-			isDirectBuffer = true
-		} else {
-			finalBuf, err := readBitmapBytes(reader, cookieHeader...)
-			if err != nil {
+		if bytesReader, ok := reader.(*bytes.Reader); ok {
+			unreadLen := bytesReader.Len()
+			buf := make([]byte, unreadLen)
+			if _, err := io.ReadFull(bytesReader, buf); err != nil {
 				return 0, err
 			}
+			originalPos, _ := bytesReader.Seek(0, io.SeekCurrent)
+			startPos := originalPos - int64(unreadLen)
+
 			byteBuffer := internal.ByteBufferPool.Get().(*internal.ByteBuffer)
-			byteBuffer.Reset(finalBuf)
+			byteBuffer.Reset(buf)
 			stream = byteBuffer
-			isPooledBuffer = true
-			cookieHeader = nil
+
+			p, err = rb.highlowcontainer.readFrom(stream, cookieHeader...)
+
+			_, _ = bytesReader.Seek(startPos+p, io.SeekStart)
+			internal.ByteBufferPool.Put(byteBuffer)
+			return p, err
 		}
+
+		byteInputAdapter := internal.ByteInputAdapterPool.Get().(*internal.ByteInputAdapter)
+		byteInputAdapter.Reset(reader)
+		stream = byteInputAdapter
 	}
 
 	p, err = rb.highlowcontainer.readFrom(stream, cookieHeader...)
 
-	if isDirectBuffer && err == nil {
-		advanceReader(reader, int(p))
-	}
-
-	if isPooledBuffer {
-		internal.ByteBufferPool.Put(stream.(*internal.ByteBuffer))
+	if !ok {
+		internal.ByteInputAdapterPool.Put(stream.(*internal.ByteInputAdapter))
 	}
 	return
 }

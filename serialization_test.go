@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"encoding/gob"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -745,4 +746,46 @@ func BenchmarkUnserializeFromBuffer(b *testing.B) {
 			b.StopTimer()
 		})
 	}
+}
+
+func TestReadFromBytesReader_NoAliasingAndDiscrepancy(t *testing.T) {
+	// Create a bitmap and serialize it
+	rb := BitmapOf(1, 100, 1000, 65535, 100000)
+	var buf bytes.Buffer
+	_, err := rb.WriteTo(&buf)
+	require.NoError(t, err)
+
+	serializedBytes := buf.Bytes()
+	// Create a copy of the serialized bytes to use with bytes.Reader
+	reusableBytes := make([]byte, len(serializedBytes))
+	copy(reusableBytes, serializedBytes)
+
+	reader := bytes.NewReader(reusableBytes)
+	rb2 := New()
+	_, err = rb2.ReadFrom(reader)
+	require.NoError(t, err)
+
+	// Verify the deserialized bitmap is correct
+	assert.True(t, rb.Equals(rb2))
+
+	// Mutate the reusableBytes slice
+	for i := range reusableBytes {
+		reusableBytes[i] = 0xAA
+	}
+
+	// Verify that the deserialized bitmap still matches the original and is not mutated/corrupted
+	assert.True(t, rb.Equals(rb2))
+
+	// Test behavior discrepancy under partial deserialization failure
+	// We truncate the serialized bytes to cause a failure midway
+	truncatedBytes := serializedBytes[:len(serializedBytes)-10]
+	truncatedReader := bytes.NewReader(truncatedBytes)
+	rb3 := New()
+	p, err := rb3.ReadFrom(truncatedReader)
+	assert.Error(t, err)
+
+	// Check that seek position of truncatedReader matches p
+	currPos, seekErr := truncatedReader.Seek(0, io.SeekCurrent)
+	require.NoError(t, seekErr)
+	assert.Equal(t, p, currPos)
 }
