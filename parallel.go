@@ -3,6 +3,7 @@ package roaring
 import (
 	"container/heap"
 	"fmt"
+	"math/bits"
 	"runtime"
 	"sync"
 )
@@ -138,6 +139,48 @@ func toBitmapContainer(c container) container {
 		}
 	}
 	return c
+}
+
+// multiwayBitmapOr reduces one shared bitmap container into a fresh output
+// container. It only accepts the dense single-key shape so ParOr can retain
+// its existing generic implementation for other inputs.
+func multiwayBitmapOr(bitmaps []*Bitmap) (*Bitmap, bool) {
+	key := bitmaps[0].highlowcontainer.keys[0]
+	for _, bitmap := range bitmaps {
+		if bitmap.highlowcontainer.size() != 1 || bitmap.highlowcontainer.keys[0] != key {
+			return nil, false
+		}
+		if _, ok := bitmap.highlowcontainer.containers[0].(*bitmapContainer); !ok {
+			return nil, false
+		}
+	}
+
+	var accumulator [bitmapContainerSize]uint64
+	for _, bitmap := range bitmaps {
+		input := bitmap.highlowcontainer.containers[0].(*bitmapContainer).bitmap
+		for word, value := range input {
+			accumulator[word] |= value
+		}
+	}
+
+	result := newBitmapContainer()
+	for word, value := range accumulator {
+		result.bitmap[word] = value
+		result.cardinality += bits.OnesCount64(value)
+	}
+
+	var output container = result
+	if result.cardinality <= arrayDefaultMaxSize {
+		output = result.toArrayContainer()
+	} else if result.isFull() {
+		output = newRunContainer16Range(0, MaxUint16)
+	}
+
+	return &Bitmap{roaringArray{
+		keys:            []uint16{key},
+		containers:      []container{output},
+		needCopyOnWrite: make([]bool, 1),
+	}}, true
 }
 
 func appenderRoutine(bitmapChan chan<- *Bitmap, resultChan <-chan keyedContainer, expectedKeysChan <-chan int) {
@@ -359,8 +402,9 @@ func ParOr(parallelism int, bitmaps ...*Bitmap) *Bitmap {
 
 	keyRange := int(hKey) - int(lKey) + 1
 	if keyRange == 1 {
-		// revert to FastOr. Since the key range is 0
-		// no container-level aggregation parallelism is achievable
+		if result, ok := multiwayBitmapOr(bitmaps); ok {
+			return result
+		}
 		return FastOr(bitmaps...)
 	}
 
