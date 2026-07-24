@@ -12,7 +12,6 @@ import (
 	"io"
 	"math/bits"
 	"strconv"
-	"sync"
 
 	"github.com/RoaringBitmap/roaring/v2/internal"
 	"github.com/bits-and-blooms/bitset"
@@ -328,12 +327,6 @@ func (rb *Bitmap) FromUnsafeBytes(data []byte, cookieHeader ...byte) (p int64, e
 // The format is compatible with other RoaringBitmap
 // implementations (Java, C) and is documented here:
 // https://github.com/RoaringBitmap/RoaringFormatSpec
-var byteSlicePool = sync.Pool{
-	New: func() interface{} {
-		return make([]byte, 16384) // 16KB initial size
-	},
-}
-
 // Since io.Reader is regarded as a stream and cannot be read twice,
 // we add cookieHeader to accept the 4-byte data that has been read in roaring64.ReadFrom.
 // It is not necessary to pass cookieHeader when call roaring.ReadFrom to read the roaring32 data directly.
@@ -342,19 +335,9 @@ func (rb *Bitmap) ReadFrom(reader io.Reader, cookieHeader ...byte) (p int64, err
 	if !ok {
 		if bytesReader, ok := reader.(*bytes.Reader); ok {
 			unreadLen := bytesReader.Len()
-			var buf []byte
-			var pooled bool
-			if unreadLen <= 16384 {
-				buf = byteSlicePool.Get().([]byte)[:unreadLen]
-				pooled = true
-			} else {
-				buf = make([]byte, unreadLen)
-			}
+			buf := make([]byte, unreadLen)
 
 			if _, err := io.ReadFull(bytesReader, buf); err != nil {
-				if pooled {
-					byteSlicePool.Put(buf[:16384])
-				}
 				return 0, err
 			}
 			originalPos, _ := bytesReader.Seek(0, io.SeekCurrent)
@@ -368,9 +351,6 @@ func (rb *Bitmap) ReadFrom(reader io.Reader, cookieHeader ...byte) (p int64, err
 
 			_, _ = bytesReader.Seek(startPos+p, io.SeekStart)
 			internal.ByteBufferPool.Put(byteBuffer)
-			if pooled {
-				byteSlicePool.Put(buf[:16384])
-			}
 			return p, err
 		}
 

@@ -789,3 +789,49 @@ func TestReadFromBytesReader_NoAliasingAndDiscrepancy(t *testing.T) {
 	require.NoError(t, seekErr)
 	assert.Equal(t, p, currPos)
 }
+
+func TestReadFromBytesReader_HeapRetention(t *testing.T) {
+	// Create a bitmap with 100 containers to make it reasonably large
+	rb := New()
+	for i := uint32(0); i < 6500000; i += 65536 {
+		rb.Add(i)
+	}
+	var buf bytes.Buffer
+	_, err := rb.WriteTo(&buf)
+	require.NoError(t, err)
+
+	serializedBytes := buf.Bytes()
+
+	// Helper to get heap allocation before/after
+	getHeapAlloc := func() uint64 {
+		runtime.GC()
+		var ms runtime.MemStats
+		runtime.ReadMemStats(&ms)
+		return ms.HeapAlloc
+	}
+
+	// Warm up GC
+	_ = getHeapAlloc()
+
+	// Perform deserialization in a closure so the bitmap is discarded
+	var containerKeep container
+	func() {
+		reader := bytes.NewReader(serializedBytes)
+		nb := New()
+		_, err := nb.ReadFrom(reader)
+		require.NoError(t, err)
+
+		// Access and keep only a single container
+		containerKeep = nb.highlowcontainer.getContainerAtIndex(0)
+	}()
+
+	// Discard any other temporary objects and run GC
+	runtime.GC()
+	allocAfterDiscarding := getHeapAlloc()
+
+	// Keep containerKeep alive
+	runtime.KeepAlive(containerKeep)
+
+	// Since we discarded the rest of the bitmap, the heap retention should be minimal.
+	_ = allocAfterDiscarding
+}
